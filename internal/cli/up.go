@@ -253,7 +253,9 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 				IgnorePatterns: spec.IgnorePatterns,
 			}, sshCfg, mutagenPath, shell.DefaultCommander)
 			signature := session.ConfigSignature()
+			refreshed := false
 			if prior, ok := existingProfileState[spec.Name]; shouldRefreshProfileSession(prior, ok, signature) {
+				refreshed = true
 				if ok {
 					shell.Debugf("profile %s sync settings changed, recreating Mutagen session", spec.Name)
 				} else {
@@ -275,6 +277,11 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 			}
 			if err := session.VerifyReady(ctx); err != nil {
 				return err
+			}
+			if spec.Name == "codex" && refreshed {
+				if err := cleanupRemoteCodexRuntimeSQLite(ctx, prov, spec.SyncRemotePath); err != nil {
+					return fmt.Errorf("profile codex runtime SQLite cleanup: %w", err)
+				}
 			}
 			profileStates = append(profileStates, state.ProfileSyncState{
 				Name:          spec.Name,
@@ -739,6 +746,61 @@ func shouldRefreshProfileSession(prior state.ProfileSyncState, found bool, signa
 		return true
 	}
 	return prior.SessionConfig == "" || prior.SessionConfig != signature
+}
+
+func cleanupRemoteCodexRuntimeSQLite(ctx context.Context, prov provider.Provider, remotePath string) error {
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		return nil
+	}
+	return prov.Exec(ctx, []string{"bash", "-c", codexRuntimeSQLiteCleanupCommand(remotePath)}, provider.ExecOptions{})
+}
+
+func codexRuntimeSQLiteCleanupCommand(remotePath string) string {
+	patterns := []string{
+		"goals_*.sqlite",
+		"goals_*.sqlite-shm",
+		"goals_*.sqlite-wal",
+		"logs_*.sqlite",
+		"logs_*.sqlite-shm",
+		"logs_*.sqlite-wal",
+		"state_*.sqlite",
+		"state_*.sqlite-shm",
+		"state_*.sqlite-wal",
+	}
+	patternArgs := strings.Join(patterns, " ")
+	return fmt.Sprintf(`set -eu
+profile=%s
+if [ ! -d "$profile" ]; then
+  exit 0
+fi
+patterns=%s
+found=0
+for pattern in $patterns; do
+  for f in "$profile"/$pattern; do
+    if [ -e "$f" ]; then
+      found=1
+      break
+    fi
+  done
+  if [ "$found" -eq 1 ]; then
+    break
+  fi
+done
+if [ "$found" -eq 0 ]; then
+  exit 0
+fi
+backup_root=/var/lib/mutapod/profile-backups/codex-runtime-sqlite
+backup="$backup_root/$(date -u +%%Y%%m%%dT%%H%%M%%SZ)"
+sudo mkdir -p "$backup"
+for pattern in $patterns; do
+  for f in "$profile"/$pattern; do
+    if [ -e "$f" ]; then
+      sudo mv "$f" "$backup"/
+    fi
+  done
+done
+`, shellQuote(remotePath), shellQuote(patternArgs))
 }
 
 func ensureAttachedContainerWorkspaceACLs(ctx context.Context, prov provider.Provider, cfg *config.Config, activeProfiles []profiles.Spec) error {

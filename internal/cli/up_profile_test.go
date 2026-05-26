@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mutapod/mutapod/internal/state"
@@ -30,5 +31,22 @@ func TestShouldRefreshProfileSessionWithMatchingSignature(t *testing.T) {
 	prior := state.ProfileSyncState{SessionConfig: "same"}
 	if shouldRefreshProfileSession(prior, true, "same") {
 		t.Fatal("expected matching signature to keep existing session")
+	}
+}
+
+func TestCodexRuntimeSQLiteCleanupCommandMovesDatabasesOutsideProfile(t *testing.T) {
+	cmd := codexRuntimeSQLiteCleanupCommand("/var/lib/mutapod/profiles/codex")
+
+	for _, expected := range []string{
+		"profile='/var/lib/mutapod/profiles/codex'",
+		"backup_root=/var/lib/mutapod/profile-backups/codex-runtime-sqlite",
+		"logs_*.sqlite",
+		"goals_*.sqlite",
+		"state_*.sqlite",
+		"sudo mv \"$f\" \"$backup\"/",
+	} {
+		if !strings.Contains(cmd, expected) {
+			t.Fatalf("cleanup command missing %q:\n%s", expected, cmd)
+		}
 	}
 }

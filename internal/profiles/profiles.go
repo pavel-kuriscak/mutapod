@@ -250,9 +250,13 @@ func newCodexDefinition() Definition {
 			"tmp/**",
 			"cache",
 			"cache/**",
-			"state_*.sqlite",
+			"goals_*.sqlite",
+			"goals_*.sqlite-shm",
+			"goals_*.sqlite-wal",
+			"logs_*.sqlite",
 			"logs_*.sqlite-shm",
 			"logs_*.sqlite-wal",
+			"state_*.sqlite",
 			"state_*.sqlite-shm",
 			"state_*.sqlite-wal",
 		},
@@ -266,11 +270,6 @@ func newCodexDefinition() Definition {
 				WrapperName: "codex",
 				WrapperBody: fmt.Sprintf("export CODEX_HOME=%s\nexec %s/bin/codex \"$@\"", shString(configMount), shString(toolMount)),
 			})
-		},
-		settingsBuilder: func(spec Spec) map[string]any {
-			return map[string]any{
-				"chatgpt.cliExecutable": "/usr/local/bin/codex",
-			}
 		},
 		remoteEnvBuilder: func(spec Spec) map[string]string {
 			return map[string]string{

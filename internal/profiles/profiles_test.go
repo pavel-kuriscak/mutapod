@@ -81,7 +81,7 @@ func TestClaudeProfileIncludesCompanionFileAndWrapperEnv(t *testing.T) {
 	}
 }
 
-func TestCodexProfileDoesNotIgnoreLiveSQLiteState(t *testing.T) {
+func TestCodexProfileIgnoresSQLiteRuntimeState(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
@@ -122,18 +122,14 @@ func TestCodexProfileDoesNotIgnoreLiveSQLiteState(t *testing.T) {
 	for _, pattern := range codex.IgnorePatterns {
 		patterns[pattern] = true
 	}
-	for _, unwanted := range []string{
-		"logs_*.sqlite",
-	} {
-		if patterns[unwanted] {
-			t.Fatalf("IgnorePatterns unexpectedly contains %q", unwanted)
-		}
-	}
-
 	for _, expected := range []string{
-		"state_*.sqlite",
+		"goals_*.sqlite",
+		"goals_*.sqlite-shm",
+		"goals_*.sqlite-wal",
+		"logs_*.sqlite",
 		"logs_*.sqlite-shm",
 		"logs_*.sqlite-wal",
+		"state_*.sqlite",
 		"state_*.sqlite-shm",
 		"state_*.sqlite-wal",
 	} {

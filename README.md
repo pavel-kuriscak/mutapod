@@ -202,9 +202,10 @@ Behavior:
 - mutapod auto-enables Claude Code when local `claude` is installed
 - mutapod creates extra Mutagen sync sessions for the enabled profiles when local profile data exists
 - these syncs are separate from the project workspace sync
+- Codex SQLite runtime/history databases such as `logs_*.sqlite`, `state_*.sqlite`, and `goals_*.sqlite` are not synced, because Codex may rewrite or validate them differently across platform-specific extension binaries
 - when `compose.primary_service` is set, mutapod mounts the synced profile directories into that service through the generated remote compose override
 - mutapod also creates a persistent tool directory on the VM for each active profile and installs the corresponding CLI in the primary container automatically
-- Codex is launched through a wrapper that exports `CODEX_HOME` to the mounted profile data automatically
+- the Codex CLI wrapper exports `CODEX_HOME` to the mounted profile data for terminal use; the VS Code Codex extension is left to use its bundled CLI
 - Claude Code is launched through a wrapper that gives it a stable managed `HOME`, so its `~/.claude` data comes from the mounted profile automatically
 
 Current limitations:
