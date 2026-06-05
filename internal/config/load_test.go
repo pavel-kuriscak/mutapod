@@ -46,6 +46,57 @@ provider:
 	}
 }
 
+func TestLoad_Azure(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+name: myservice
+provider:
+  type: azure
+  azure:
+    tenant: tenant-123
+    subscription: sub-123
+    resource_group: rg-dev
+    location: westeurope
+    vm_size: Standard_D4s_v5
+    disk_size_gb: 64
+    storage_sku: StandardSSD_LRS
+    image: Ubuntu2204
+    admin_username: devuser
+    vnet: dev-vnet
+    subnet: dev-subnet
+    identity: "[system]"
+    prefer_private_ip: true
+`)
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Provider.Azure.Tenant != "tenant-123" {
+		t.Errorf("tenant: got %q", cfg.Provider.Azure.Tenant)
+	}
+	if cfg.Provider.Azure.Subscription != "sub-123" {
+		t.Errorf("subscription: got %q", cfg.Provider.Azure.Subscription)
+	}
+	if cfg.Provider.Azure.ResourceGroup != "rg-dev" {
+		t.Errorf("resource_group: got %q", cfg.Provider.Azure.ResourceGroup)
+	}
+	if cfg.Provider.Azure.Location != "westeurope" {
+		t.Errorf("location: got %q", cfg.Provider.Azure.Location)
+	}
+	if cfg.Provider.Azure.VMSize != "Standard_D4s_v5" {
+		t.Errorf("vm_size: got %q", cfg.Provider.Azure.VMSize)
+	}
+	if cfg.Provider.Azure.DiskSizeGB != 64 {
+		t.Errorf("disk_size_gb: got %d", cfg.Provider.Azure.DiskSizeGB)
+	}
+	if cfg.Provider.Azure.AdminUsername != "devuser" {
+		t.Errorf("admin_username: got %q", cfg.Provider.Azure.AdminUsername)
+	}
+	if !cfg.Provider.Azure.PreferPrivateIP {
+		t.Error("prefer_private_ip: got false, want true")
+	}
+}
+
 func TestLoad_Defaults(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, `
@@ -85,6 +136,88 @@ provider:
 	}
 	if cfg.Sync.Mode != "two-way-resolved" {
 		t.Errorf("default sync mode: got %q", cfg.Sync.Mode)
+	}
+}
+
+func TestLoad_AzureDefaults(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+name: test
+provider:
+  type: azure
+  azure:
+    resource_group: rg-dev
+`)
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Provider.Azure.VMSize != "Standard_D4s_v5" {
+		t.Errorf("default vm_size: got %q", cfg.Provider.Azure.VMSize)
+	}
+	if cfg.Provider.Azure.DiskSizeGB != 30 {
+		t.Errorf("default disk_size_gb: got %d", cfg.Provider.Azure.DiskSizeGB)
+	}
+	if cfg.Provider.Azure.StorageSKU != "StandardSSD_LRS" {
+		t.Errorf("default storage_sku: got %q", cfg.Provider.Azure.StorageSKU)
+	}
+	if cfg.Provider.Azure.Image != "Ubuntu2204" {
+		t.Errorf("default image: got %q", cfg.Provider.Azure.Image)
+	}
+	if cfg.Provider.Azure.AdminUsername != "azureuser" {
+		t.Errorf("default admin_username: got %q", cfg.Provider.Azure.AdminUsername)
+	}
+	if cfg.Provider.Azure.PublicIPSku != "Standard" {
+		t.Errorf("default public_ip_sku: got %q", cfg.Provider.Azure.PublicIPSku)
+	}
+	if cfg.Provider.Azure.PublicIP {
+		t.Error("default public_ip: got true, want false")
+	}
+	if cfg.Provider.Azure.Tags["managed-by"] != "mutapod" {
+		t.Errorf("default tags: got %v", cfg.Provider.Azure.Tags)
+	}
+}
+
+func TestLoad_ProviderOverrideSelectsActiveProvider(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+name: test
+provider:
+  type: gcp
+  gcp:
+    project: proj
+  azure:
+    resource_group: rg-dev
+`)
+	cfg, err := LoadWithOptions(dir, LoadOptions{ProviderOverride: "azure"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Provider.Type != "azure" {
+		t.Fatalf("provider.type: got %q, want azure", cfg.Provider.Type)
+	}
+	if cfg.Provider.Azure.ResourceGroup != "rg-dev" {
+		t.Fatalf("azure.resource_group: got %q", cfg.Provider.Azure.ResourceGroup)
+	}
+	if cfg.Provider.Azure.VMSize != "Standard_D4s_v5" {
+		t.Fatalf("azure default vm_size: got %q", cfg.Provider.Azure.VMSize)
+	}
+}
+
+func TestLoad_ProviderOverrideAllowsMissingDefaultProviderType(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+name: test
+provider:
+  azure:
+    resource_group: rg-dev
+`)
+	cfg, err := LoadWithOptions(dir, LoadOptions{ProviderOverride: "azure"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Provider.Type != "azure" {
+		t.Fatalf("provider.type: got %q, want azure", cfg.Provider.Type)
 	}
 }
 
@@ -226,9 +359,9 @@ func TestLoad_Validation(t *testing.T) {
 			wantErr: "'provider.gcp.project' is required",
 		},
 		{
-			name:    "azure unsupported",
+			name:    "azure missing resource group",
 			yaml:    "name: x\nprovider:\n  type: azure\n",
-			wantErr: `provider type "azure" is not currently supported; use "gcp"`,
+			wantErr: "'provider.azure.resource_group' is required",
 		},
 		{
 			name:    "invalid reverse forward port",
@@ -312,6 +445,23 @@ func TestDetectInstanceOwner_GCPPrefersActiveAccount(t *testing.T) {
 	got := detectInstanceOwner("gcp")
 	if got != "pavel-kuriscak" {
 		t.Fatalf("detectInstanceOwner(gcp): got %q, want %q", got, "pavel-kuriscak")
+	}
+}
+
+func TestDetectInstanceOwner_AzurePrefersActiveAccount(t *testing.T) {
+	oldAzure := azureAccountLookup
+	oldLocal := localUsernameLookup
+	t.Cleanup(func() {
+		azureAccountLookup = oldAzure
+		localUsernameLookup = oldLocal
+	})
+
+	azureAccountLookup = func() string { return "pavel.kuriscak@example.com" }
+	localUsernameLookup = func() string { return "ignored-local-user" }
+
+	got := detectInstanceOwner("azure")
+	if got != "pavel-kuriscak" {
+		t.Fatalf("detectInstanceOwner(azure): got %q, want %q", got, "pavel-kuriscak")
 	}
 }
 

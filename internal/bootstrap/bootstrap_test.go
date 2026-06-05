@@ -13,6 +13,7 @@ func TestIsSSHStartupError(t *testing.T) {
 		want bool
 	}{
 		{err: errors.New("dial tcp 34.6.187.9:22: connectex: No connection could be made because the target machine actively refused it."), want: true},
+		{err: errors.New("dial tcp 10.150.170.36:22: connectex: A connection attempt failed because the connected party did not properly respond after a period of time"), want: true},
 		{err: errors.New("dial tcp: connection refused"), want: true},
 		{err: errors.New("read tcp: i/o timeout"), want: true},
 		{err: errors.New("permission denied (publickey)"), want: true},

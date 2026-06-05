@@ -39,6 +39,9 @@ type Spec struct {
 	SupplementalSyncs []SupplementalSync
 	IgnorePatterns    []string
 	LocalBinaryPath   string
+	// NeedsSandboxNamespaces requests Docker service settings that let code
+	// agent sandbox helpers create Linux namespaces inside the container.
+	NeedsSandboxNamespaces bool
 
 	def Definition
 }
@@ -145,6 +148,7 @@ type nodeProfileDefinition struct {
 	defaultConfigMountPath string
 	defaultToolMountPath   string
 	ignorePatterns         []string
+	needsSandboxNamespaces bool
 	configSelector         func(*config.Config) config.ProfileSyncConfig
 	binaryFallback         func() (string, bool)
 	setupScriptBuilder     func(spec Spec, pkg string) string
@@ -188,12 +192,13 @@ func (d nodeProfileDefinition) Detect(cfg *config.Config) (Spec, bool, error) {
 	toolMountPath := d.defaultToolMountPath
 
 	spec := Spec{
-		Name:            d.name,
-		LocalPath:       localHomePath,
-		SyncRemotePath:  syncRemotePath,
-		ToolRemotePath:  toolRemotePath,
-		IgnorePatterns:  append([]string(nil), d.ignorePatterns...),
-		LocalBinaryPath: localBinaryPath,
+		Name:                   d.name,
+		LocalPath:              localHomePath,
+		SyncRemotePath:         syncRemotePath,
+		ToolRemotePath:         toolRemotePath,
+		IgnorePatterns:         append([]string(nil), d.ignorePatterns...),
+		LocalBinaryPath:        localBinaryPath,
+		NeedsSandboxNamespaces: d.needsSandboxNamespaces,
 		Mounts: []Mount{
 			{RemotePath: syncRemotePath, ContainerPath: mountPath},
 			{RemotePath: toolRemotePath, ContainerPath: toolMountPath},
@@ -236,7 +241,8 @@ func newCodexDefinition() Definition {
 		configSelector: func(cfg *config.Config) config.ProfileSyncConfig {
 			return cfg.Profiles.Codex
 		},
-		binaryFallback: detectCodexFromVSCodeExtension,
+		binaryFallback:         detectCodexFromVSCodeExtension,
+		needsSandboxNamespaces: true,
 		ignorePatterns: []string{
 			".sandbox",
 			".sandbox/**",

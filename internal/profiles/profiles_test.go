@@ -117,6 +117,9 @@ func TestCodexProfileIgnoresSQLiteRuntimeState(t *testing.T) {
 	if !found {
 		t.Fatalf("codex profile not detected")
 	}
+	if !codex.NeedsSandboxNamespaces {
+		t.Fatalf("codex profile should request sandbox namespace support")
+	}
 
 	patterns := make(map[string]bool, len(codex.IgnorePatterns))
 	for _, pattern := range codex.IgnorePatterns {

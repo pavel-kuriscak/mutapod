@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	cfgFile string
-	debug   bool
+	cfgFile          string
+	debug            bool
+	providerOverride string
 )
 
 // Root returns the root cobra command.
@@ -30,6 +31,7 @@ to it via Mutagen, starts a devcontainer, and forwards ports — all with one co
 	}
 
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "path to mutapod.yaml (default: search up from cwd)")
+	root.PersistentFlags().StringVar(&providerOverride, "provider", "", "active provider for this run (default: provider.type in mutapod.yaml)")
 	root.PersistentFlags().BoolVar(&debug, "debug", false, "enable verbose debug output")
 
 	root.AddCommand(upCmd())

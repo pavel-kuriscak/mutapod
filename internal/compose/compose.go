@@ -324,8 +324,10 @@ func remoteOverridePath(cfg *config.Config) string {
 
 func renderRemoteOverride(cfg *config.Config, activeProfiles []profiles.Spec) ([]byte, error) {
 	type overrideService struct {
-		Volumes    []string `yaml:"volumes,omitempty"`
-		ExtraHosts []string `yaml:"extra_hosts,omitempty"`
+		Volumes     []string `yaml:"volumes,omitempty"`
+		ExtraHosts  []string `yaml:"extra_hosts,omitempty"`
+		CapAdd      []string `yaml:"cap_add,omitempty"`
+		SecurityOpt []string `yaml:"security_opt,omitempty"`
 	}
 	type overrideFile struct {
 		Services map[string]overrideService `yaml:"services"`
@@ -338,6 +340,8 @@ func renderRemoteOverride(cfg *config.Config, activeProfiles []profiles.Spec) ([
 
 	volumes := make([]string, 0, 1+len(activeProfiles)*2)
 	extraHosts := make([]string, 0, 1)
+	capAdd := make([]string, 0, 1)
+	securityOpt := make([]string, 0, 1)
 	needsWorkspaceMount, err := NeedsWorkspaceOverride(cfg)
 	if err != nil {
 		return nil, err
@@ -357,19 +361,26 @@ func renderRemoteOverride(cfg *config.Config, activeProfiles []profiles.Spec) ([
 			}
 			volumes = append(volumes, filepath.ToSlash(mount.RemotePath)+":"+filepath.ToSlash(mount.ContainerPath))
 		}
+		if profile.NeedsSandboxNamespaces {
+			capAdd = appendUnique(capAdd, "SYS_ADMIN")
+			securityOpt = appendUnique(securityOpt, "apparmor=unconfined")
+			securityOpt = appendUnique(securityOpt, "seccomp=unconfined")
+		}
 	}
 	if len(cfg.Compose.ReverseForwards) > 0 {
 		extraHosts = append(extraHosts, "host.docker.internal:host-gateway")
 	}
-	if len(volumes) == 0 && len(extraHosts) == 0 {
+	if len(volumes) == 0 && len(extraHosts) == 0 && len(capAdd) == 0 && len(securityOpt) == 0 {
 		return nil, nil
 	}
 
 	doc := overrideFile{
 		Services: map[string]overrideService{
 			service: {
-				Volumes:    volumes,
-				ExtraHosts: extraHosts,
+				Volumes:     volumes,
+				ExtraHosts:  extraHosts,
+				CapAdd:      capAdd,
+				SecurityOpt: securityOpt,
 			},
 		},
 	}
@@ -397,11 +408,23 @@ func NeedsRemoteOverride(cfg *config.Config, activeProfiles []profiles.Spec) (bo
 		return true, nil
 	}
 	for _, profile := range activeProfiles {
+		if profile.NeedsSandboxNamespaces {
+			return true, nil
+		}
 		if len(profile.Mounts) > 0 {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // EnsureRemoteOverride uploads the generated compose override when the base

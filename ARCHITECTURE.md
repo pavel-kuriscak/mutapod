@@ -12,7 +12,7 @@ trust the code over this doc and update the doc.
 A Go CLI that gives you a "cloud-backed local dev environment":
 
 - code lives **locally**, edited with VS Code
-- a **cloud VM** (GCP today; Azure stub) runs the project's Docker Compose stack
+- a **cloud VM** (GCP or Azure) runs the project's Docker Compose stack
 - **Mutagen** continuously syncs files in both directions and forwards
   TCP ports between local and remote
 - A project-scoped **Docker context** points VS Code at the remote daemon, so
@@ -30,10 +30,10 @@ Five non-obvious decisions shape the codebase:
 1. **Pure-Go SSH for everything.** No PuTTY, no system `ssh`/`scp`, no
    `gcloud compute ssh` for non-interactive work. `golang.org/x/crypto/ssh` is
    used directly via the `internal/sshrun` package. This was added because
-   PuTTY's host-key prompt blocked bootstrap on Windows. `gcloud` is still used
-   for VM lifecycle (`instances create/start/stop/delete/describe`) and for
-   `gcloud compute config-ssh` (which materialises an SSH config entry and
-   provisions a key in the project metadata).
+   PuTTY's host-key prompt blocked bootstrap on Windows. Cloud CLIs are still
+   used for VM lifecycle (`gcloud compute ...` or `az vm ...`) and for
+   interactive SSH. GCP uses `gcloud compute config-ssh`; Azure writes a
+   project host alias itself after querying the VM IP.
 
 2. **Mutagen for sync + port forwards, parsed as text.** Mutagen v0.18.1 has no
    `--output json` flag and no `--label-selector`. So `internal/sync/mutagen.go`
@@ -43,7 +43,7 @@ Five non-obvious decisions shape the codebase:
    they are *paused* on `mutapod down` (history preserved for fast resume).
 
 3. **Single Provider interface, but cloud CLIs are still shelled out.** Cloud
-   ops happen through `gcloud` (and would happen through `az` for Azure). The
+   ops happen through `gcloud` or `az`. The
    `Provider` interface (`internal/provider/provider.go`) hides this behind
    `EnsureInstance / State / SSHConfig / Exec / CopyFile / StopInstance /
    DeleteInstance`. Pure-Go SSH is reached through `Exec` and `CopyFile`.
@@ -86,13 +86,16 @@ internal/
     autoupdate_unix.go      syscall.Exec relaunch
     autoupdate_windows.go   no-op (Windows uses staged-replace pattern)
 
-  config/                   parses mutapod.yaml; defaults; helpers like
-                            cfg.WorkspacePath(), cfg.InstanceName(),
-                            cfg.LocalSyncPath(), cfg.Compose.*
+  config/                   parses mutapod.yaml; applies --provider override
+                            before provider-specific defaults/validation;
+                            helpers like cfg.WorkspacePath(),
+                            cfg.InstanceName(), cfg.LocalSyncPath(),
+                            cfg.Compose.*
 
   provider/                 Provider interface + registry
     gcp/gcp.go              GCP impl: gcloud + pure-Go SSH
-    azure/azure.go          stub, not yet wired
+    azure/azure.go          Azure impl: az + generated SSH config alias +
+                            pure-Go SSH
 
   sshrun/                   pure-Go SSH client
                             — Run(ctx,cmd,stdin,stdout,stderr) with
@@ -176,18 +179,22 @@ specialised package.
 ```
 1.  parseUpLaunchMode(args)                  — "" or "container" → attached;
                                                "local" → open code-workspace
-2.  loadConfig()                             — find mutapod.yaml walking up
+2.  loadConfig()                             — find mutapod.yaml walking up;
+                                               provider.type is the default
+                                               provider unless --provider
+                                               overrides it
 3.  confirmMissingIgnoreFile(...)            — warn if no .mutapodignore
 4.  agents.Ensure(cfg)                       — write/update AGENTS.md block
 5.  deps.MutagenPath()                       — download mutagen if needed
 6.  state.Load(cfg.Name)                     — read ~/.mutapod/state/<n>.json
-7.  provider.New(cfg, ...)                   — registry lookup → gcp.Provider
+7.  provider.New(cfg, ...)                   — registry lookup → cloud Provider
 8.  prov.EnsureInstance(ctx)                 — create or start VM
-9.  prov.SSHConfig(ctx)                      — gcloud compute config-ssh,
-                                               describe to get external IP,
-                                               parse ~/.ssh/config entry,
-                                               TrustHost() to populate
-                                               google_compute_known_hosts
+9.  prov.SSHConfig(ctx)                      — provider-specific SSH setup:
+                                               GCP runs config-ssh and parses
+                                               the generated entry; Azure
+                                               queries VM IP and writes its own
+                                               Host block; both TrustHost()
+                                               for noninteractive access
 10. profiles.Active(cfg)                     — detect codex/claude
 11. bootstrap.Run(ctx, prov)                 — upload + run bootstrap.sh
 12. ensureRemoteWorkspace(...)               — mkdir + chown /workspace/<n>
@@ -297,9 +304,11 @@ Local (per-workspace, on the developer's machine):
   bridging `~/.claude.json` into a Mutagen-syncable directory
 - `~/.mutapod/bin/mutagen` — auto-downloaded mutagen binary
 - `~/.ssh/google_compute_engine` — gcloud-managed private key
+- `~/.ssh/id_rsa` or configured Azure key — Azure SSH private key
 - `~/.ssh/google_compute_known_hosts` — populated by `sshrun.TrustHost`
+- `~/.ssh/known_hosts` — populated by `sshrun.TrustHost` for Azure aliases
 - `~/.ssh/config` — populated by `gcloud compute config-ssh`; mutapod *parses*
-  this to discover the user, port, and HostKeyAlias
+  this for GCP and writes an Azure Host block itself
 
 VM (per-instance, shared by anyone connecting to that VM):
 - `/workspace/<name>` — synced project root
@@ -332,6 +341,8 @@ ends up here.
 | **GCP HostKeyAlias** | gcloud writes `HostKeyAlias=compute.NNNNNN` (with `=`, not space) into `~/.ssh/config`. The parser must accept either separator and trim ` \t=` from the value. The alias is mandatory for mutagen, since mutagen calls into ssh which verifies the key against the known_hosts entry under that alias. |
 | **`google_compute_known_hosts` directory bug** | An earlier bug created the file as a *directory* via `os.MkdirAll(knownHostsFile, ...)`. Fix: `os.MkdirAll(filepath.Dir(knownHostsFile), 0700)`. Verify before writing. |
 | **GCP SSH username** | gcloud doesn't honour the `remote_user` from mutapod.yaml — it provisions keys for the *local* OS user (lowercased, with `DOMAIN\` stripped on Windows). `gcpSSHUsername()` derives this; the parsed `User` from `~/.ssh/config` takes precedence when present. |
+| **Azure private-only default** | Azure VM creation passes `--public-ip-address "" --nsg-rule NONE` unless `provider.azure.public_ip: true` is set. SSH uses the VM private IP by default, so the local machine must have private routing to the target subnet. |
+| **Azure SSH alias** | Azure does not need `az ssh config` for mutapod's noninteractive path. `provider/azure` writes `Host <instance>.azure` with `HostName`, `IdentityFile`, `UserKnownHostsFile`, and `HostKeyAlias`, then trusts the host key in `~/.ssh/known_hosts`. |
 | **Mutagen text parsing** | v0.18.1 has no JSON output. `parseSyncStatus` and `parseForwardStatus` walk the human-readable lines looking for `Status:` and normalise to a fixed token set. `isNoSessions(err)` recognises the three different "not found" phrasings mutagen has used. |
 | **Session config signature** | `Manager.SessionConfigSignature` hashes the args mutagen would create the session with. When the signature differs from the saved one, the session is terminated and recreated. The version prefix (`v3` currently) is bumped whenever the args list changes structurally; this forces a one-shot recreation on upgrade. |
 | **Stale-IP recreation** | When the VM IP changes between runs, mutagen sessions encoded with the old endpoint are terminated and recreated rather than resumed. `state.Instance.LastKnownIP` is the source of truth for the comparison. |
@@ -378,4 +389,5 @@ mutapod would shell out with. Live cloud testing is done from `testproject/`
 - A plugin system. Profiles are hardcoded (codex, claude). Adding a third
   profile means another entry in `internal/profiles/profiles.go`.
 - Direct API SDKs. Cloud ops use the cloud CLI; this kept the binary small
-  and re-used the user's existing cloud auth (`gcloud auth login`).
+  and re-used the user's existing cloud auth (`gcloud auth login` or
+  `az login`).

@@ -457,7 +457,8 @@ services:
 	}, Sync: config.SyncConfig{RemotePath: "/workspace/test"}}
 
 	data, err := renderRemoteOverride(c, []profiles.Spec{{
-		Name: "codex",
+		Name:                   "codex",
+		NeedsSandboxNamespaces: true,
 		Mounts: []profiles.Mount{
 			{RemotePath: "/var/lib/mutapod/profiles/codex", ContainerPath: profiles.RootHomeDir + "/.codex"},
 			{RemotePath: "/var/lib/mutapod/tools/codex", ContainerPath: "/var/lib/mutapod/tools/codex"},
@@ -472,6 +473,15 @@ services:
 	}
 	if !strings.Contains(text, "/var/lib/mutapod/tools/codex:/var/lib/mutapod/tools/codex") {
 		t.Fatalf("expected codex tool mount in override: %s", text)
+	}
+	if !strings.Contains(text, "SYS_ADMIN") {
+		t.Fatalf("expected codex sandbox capability in override: %s", text)
+	}
+	if !strings.Contains(text, "apparmor=unconfined") {
+		t.Fatalf("expected codex sandbox security option in override: %s", text)
+	}
+	if !strings.Contains(text, "seccomp=unconfined") {
+		t.Fatalf("expected codex seccomp option in override: %s", text)
 	}
 }
 
@@ -509,5 +519,19 @@ func TestNeedsRemoteOverride_WithReverseForwardsRequiresOverride(t *testing.T) {
 	}
 	if !needed {
 		t.Fatal("expected reverse forwards to require a remote override")
+	}
+}
+
+func TestNeedsRemoteOverride_WithSandboxNamespacesRequiresOverride(t *testing.T) {
+	c := &config.Config{Name: "test", Compose: config.ComposeConfig{
+		PrimaryService: "web",
+	}}
+
+	needed, err := NeedsRemoteOverride(c, []profiles.Spec{{Name: "codex", NeedsSandboxNamespaces: true}})
+	if err != nil {
+		t.Fatalf("NeedsRemoteOverride: %v", err)
+	}
+	if !needed {
+		t.Fatal("expected sandbox namespace support to require a remote override")
 	}
 }

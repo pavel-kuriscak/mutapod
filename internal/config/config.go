@@ -17,7 +17,7 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Type  string      `yaml:"type"` // "gcp"
+	Type  string      `yaml:"type"` // "gcp" or "azure"
 	GCP   GCPConfig   `yaml:"gcp"`
 	Azure AzureConfig `yaml:"azure"`
 }
@@ -40,15 +40,25 @@ type GCPConfig struct {
 }
 
 type AzureConfig struct {
-	Subscription  string `yaml:"subscription"`
-	ResourceGroup string `yaml:"resource_group"`
-	Location      string `yaml:"location"`
-	VMSize        string `yaml:"vm_size"`
-	Image         string `yaml:"image"`
-	VNet          string `yaml:"vnet"`
-	Subnet        string `yaml:"subnet"`
-	AdminUsername string `yaml:"admin_username"`
-	Identity      string `yaml:"identity"`
+	Tenant            string            `yaml:"tenant"`
+	Subscription      string            `yaml:"subscription"`
+	ResourceGroup     string            `yaml:"resource_group"`
+	Location          string            `yaml:"location"`
+	VMSize            string            `yaml:"vm_size"`
+	DiskSizeGB        int               `yaml:"disk_size_gb"`
+	StorageSKU        string            `yaml:"storage_sku"`
+	Image             string            `yaml:"image"`
+	VNet              string            `yaml:"vnet"`
+	Subnet            string            `yaml:"subnet"`
+	AdminUsername     string            `yaml:"admin_username"`
+	Identity          string            `yaml:"identity"`
+	PublicIP          bool              `yaml:"public_ip"`
+	PublicIPSku       string            `yaml:"public_ip_sku"`
+	PreferPrivateIP   bool              `yaml:"prefer_private_ip"`
+	SSHSources        []string          `yaml:"ssh_sources"`
+	SSHPrivateKeyFile string            `yaml:"ssh_private_key_file"`
+	SSHPublicKeyFile  string            `yaml:"ssh_public_key_file"`
+	Tags              map[string]string `yaml:"tags"`
 }
 
 type SyncConfig struct {

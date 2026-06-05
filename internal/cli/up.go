@@ -871,7 +871,11 @@ ensure_acl_tools() {
 ensure_acl_tools
 apply_workspace_acls() {
   setfacl -m "u:${uid}:rwX" "$workspace" 2>/dev/null || true
+  setfacl -m "u:0:rwX" "$workspace" 2>/dev/null || true
   setfacl -m "d:u:${uid}:rwX" "$workspace" 2>/dev/null || true
+  setfacl -m "d:u:0:rwX" "$workspace" 2>/dev/null || true
+  find "$workspace" -exec setfacl -m "u:0:rwX" {} + 2>/dev/null || true
+  find "$workspace" -type d -exec setfacl -m "d:u:0:rwX" {} + 2>/dev/null || true
   find "$workspace" -uid 0 -exec setfacl -m "u:${uid}:rwX" {} + 2>/dev/null || true
   find "$workspace" -uid 0 -type d -exec setfacl -m "d:u:${uid}:rwX" {} + 2>/dev/null || true
 }
@@ -883,7 +887,10 @@ workspace=%s
 uid=$uid
 apply_workspace_acls() {
   setfacl -m "u:\${uid}:rwX" "\$workspace" 2>/dev/null || true
+  setfacl -m "u:0:rwX" "\$workspace" 2>/dev/null || true
   setfacl -m "d:u:\${uid}:rwX" "\$workspace" 2>/dev/null || true
+  setfacl -m "d:u:0:rwX" "\$workspace" 2>/dev/null || true
+  find "\$workspace" -type d -exec setfacl -m "d:u:0:rwX" {} + 2>/dev/null || true
   find "\$workspace" -uid 0 -exec setfacl -m "u:\${uid}:rwX" {} + 2>/dev/null || true
   find "\$workspace" -uid 0 -type d -exec setfacl -m "d:u:\${uid}:rwX" {} + 2>/dev/null || true
 }
@@ -953,14 +960,15 @@ func removeRemoteWorkspaceWrapper(ctx context.Context, prov provider.Provider, c
 }
 
 func loadConfig() (*config.Config, error) {
+	opts := config.LoadOptions{ProviderOverride: providerOverride}
 	if cfgFile != "" {
-		return config.LoadFile(cfgFile)
+		return config.LoadFileWithOptions(cfgFile, opts)
 	}
 	cwd, err := currentDir()
 	if err != nil {
 		return nil, err
 	}
-	return config.Load(cwd)
+	return config.LoadWithOptions(cwd, opts)
 }
 
 func confirmMissingIgnoreFile(in io.Reader, out io.Writer, cfg *config.Config) error {

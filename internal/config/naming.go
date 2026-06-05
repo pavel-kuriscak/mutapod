@@ -12,6 +12,7 @@ import (
 var (
 	invalidInstanceToken = regexp.MustCompile(`[^a-z0-9]+`)
 	gcloudAccountLookup  = lookupGCloudAccount
+	azureAccountLookup   = lookupAzureAccount
 	localUsernameLookup  = lookupLocalUsername
 )
 
@@ -29,11 +30,12 @@ func (c *Config) InstanceName() string {
 func detectInstanceOwner(providerType string) string {
 	if providerType == "gcp" {
 		if account := gcloudAccountLookup(); account != "" {
-			localPart := account
-			if at := strings.Index(localPart, "@"); at >= 0 {
-				localPart = localPart[:at]
-			}
-			return sanitizeInstanceToken(localPart, "user")
+			return sanitizeAccountToken(account)
+		}
+	}
+	if providerType == "azure" {
+		if account := azureAccountLookup(); account != "" {
+			return sanitizeAccountToken(account)
 		}
 	}
 
@@ -41,6 +43,14 @@ func detectInstanceOwner(providerType string) string {
 		return sanitizeInstanceToken(username, "user")
 	}
 	return "user"
+}
+
+func sanitizeAccountToken(account string) string {
+	localPart := account
+	if at := strings.Index(localPart, "@"); at >= 0 {
+		localPart = localPart[:at]
+	}
+	return sanitizeInstanceToken(localPart, "user")
 }
 
 func lookupGCloudAccount() string {
@@ -55,6 +65,25 @@ func lookupGCloudAccount() string {
 		}
 		value := strings.TrimSpace(string(out))
 		if value == "" || strings.EqualFold(value, "(unset)") {
+			continue
+		}
+		return value
+	}
+	return ""
+}
+
+func lookupAzureAccount() string {
+	for _, binary := range []string{"az.cmd", "az"} {
+		path, err := exec.LookPath(binary)
+		if err != nil {
+			continue
+		}
+		out, err := exec.Command(path, "account", "show", "--query", "user.name", "--output", "tsv").Output()
+		if err != nil {
+			continue
+		}
+		value := strings.TrimSpace(string(out))
+		if value == "" || strings.EqualFold(value, "null") {
 			continue
 		}
 		return value

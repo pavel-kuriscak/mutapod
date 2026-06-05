@@ -95,7 +95,9 @@ func isSSHStartupError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection refused") ||
+	return strings.Contains(msg, "connection attempt failed") ||
+		strings.Contains(msg, "failed to respond") ||
+		strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "actively refused") ||
 		strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "no route to host") ||

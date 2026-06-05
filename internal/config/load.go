@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,16 +15,33 @@ const filename = "mutapod.yaml"
 // Load finds mutapod.yaml by walking up from dir and parses it.
 // dir is typically the current working directory.
 func Load(dir string) (*Config, error) {
+	return LoadWithOptions(dir, LoadOptions{})
+}
+
+// LoadOptions controls how mutapod.yaml is interpreted.
+type LoadOptions struct {
+	// ProviderOverride selects the active provider for this invocation. When
+	// empty, provider.type from mutapod.yaml is used as the default provider.
+	ProviderOverride string
+}
+
+// LoadWithOptions finds mutapod.yaml by walking up from dir and parses it.
+func LoadWithOptions(dir string, opts LoadOptions) (*Config, error) {
 	path, err := find(dir)
 	if err != nil {
 		return nil, err
 	}
-	return loadFile(path)
+	return loadFile(path, opts)
 }
 
 // LoadFile parses a specific mutapod.yaml file.
 func LoadFile(path string) (*Config, error) {
-	return loadFile(path)
+	return LoadFileWithOptions(path, LoadOptions{})
+}
+
+// LoadFileWithOptions parses a specific mutapod.yaml file.
+func LoadFileWithOptions(path string, opts LoadOptions) (*Config, error) {
+	return loadFile(path, opts)
 }
 
 func find(start string) (string, error) {
@@ -45,7 +63,7 @@ func find(start string) (string, error) {
 	return "", fmt.Errorf("config: %s not found in %s or any parent directory", filename, start)
 }
 
-func loadFile(path string) (*Config, error) {
+func loadFile(path string, opts LoadOptions) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
@@ -55,6 +73,9 @@ func loadFile(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	cfg.Dir = filepath.Dir(path)
+	if providerOverride := strings.ToLower(strings.TrimSpace(opts.ProviderOverride)); providerOverride != "" {
+		cfg.Provider.Type = providerOverride
+	}
 	applyDefaults(&cfg)
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -106,6 +127,30 @@ func applyDefaults(cfg *Config) {
 			gcp.Labels = map[string]string{"managed-by": "mutapod"}
 		}
 	}
+	if cfg.Provider.Type == "azure" {
+		az := &cfg.Provider.Azure
+		if az.VMSize == "" {
+			az.VMSize = "Standard_D4s_v5"
+		}
+		if az.DiskSizeGB == 0 {
+			az.DiskSizeGB = 30
+		}
+		if az.StorageSKU == "" {
+			az.StorageSKU = "StandardSSD_LRS"
+		}
+		if az.Image == "" {
+			az.Image = "Ubuntu2204"
+		}
+		if az.AdminUsername == "" {
+			az.AdminUsername = "azureuser"
+		}
+		if az.PublicIPSku == "" {
+			az.PublicIPSku = "Standard"
+		}
+		if az.Tags == nil {
+			az.Tags = map[string]string{"managed-by": "mutapod"}
+		}
+	}
 }
 
 func validate(cfg *Config) error {
@@ -121,9 +166,11 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("config: 'provider.gcp.project' is required")
 		}
 	case "azure":
-		return fmt.Errorf("config: provider type %q is not currently supported; use %q", cfg.Provider.Type, "gcp")
+		if cfg.Provider.Azure.ResourceGroup == "" {
+			return fmt.Errorf("config: 'provider.azure.resource_group' is required")
+		}
 	default:
-		return fmt.Errorf("config: unsupported provider type %q (supported: gcp)", cfg.Provider.Type)
+		return fmt.Errorf("config: unsupported provider type %q (supported: gcp, azure)", cfg.Provider.Type)
 	}
 	if err := validatePorts("compose.extra_ports", cfg.Compose.ExtraPorts); err != nil {
 		return err

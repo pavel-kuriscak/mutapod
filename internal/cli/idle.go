@@ -190,6 +190,9 @@ func startIdleHeartbeat(cfg *config.Config) error {
 	} else {
 		args = append(args, "--config", configPath(cfg))
 	}
+	if providerOverride != "" {
+		args = append(args, "--provider", providerOverride)
+	}
 
 	cmd := exec.Command(exe, args...)
 	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)

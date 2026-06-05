@@ -418,6 +418,13 @@ func TestRetrySSHReadyRetriesTransientErrors(t *testing.T) {
 	}
 }
 
+func TestIsSSHStartupErrorTreatsWindowsConnectTimeoutAsTransient(t *testing.T) {
+	err := errors.New("sshrun: connect to capture host key: dial tcp 34.90.155.38:22: connectex: A connection attempt failed because the connected party did not properly respond after a period of time")
+	if !isSSHStartupError(err) {
+		t.Fatalf("expected Windows connect timeout to be transient")
+	}
+}
+
 func TestRetrySSHReadyStopsOnNonTransientError(t *testing.T) {
 	oldTimeout := sshReadyTimeout
 	oldPeriod := sshReadyRetryPeriod
