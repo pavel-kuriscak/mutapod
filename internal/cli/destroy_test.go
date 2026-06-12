@@ -12,7 +12,7 @@ import (
 )
 
 func TestConfirmDestroy(t *testing.T) {
-	ok, err := confirmDestroy(strings.NewReader("mutapod-demo\n"), &strings.Builder{}, "mutapod-demo")
+	ok, err := confirmDestroy(strings.NewReader("yes\n"), &strings.Builder{}, "mutapod-demo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestConfirmDestroy(t *testing.T) {
 }
 
 func TestConfirmDestroyRejectsWrongValue(t *testing.T) {
-	ok, err := confirmDestroy(strings.NewReader("demo\n"), &strings.Builder{}, "mutapod-demo")
+	ok, err := confirmDestroy(strings.NewReader("no\n"), &strings.Builder{}, "mutapod-demo")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

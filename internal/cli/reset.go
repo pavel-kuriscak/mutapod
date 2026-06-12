@@ -80,7 +80,11 @@ func runReset(cmd *cobra.Command, args []string) error {
 	}
 	ok("Local mutapod state cleared: %s", cfg.Name)
 
-	return runUpWithConfig(ctx, cfg, launchMode, buildImages)
+	return runUpWithConfig(ctx, cfg, launchMode, buildImages, vmUpOptions{
+		Interactive: isTerminal(os.Stdin) && isTerminal(os.Stdout),
+		In:          os.Stdin,
+		Out:         os.Stdout,
+	})
 }
 
 var _ = vscode.LaunchLocal

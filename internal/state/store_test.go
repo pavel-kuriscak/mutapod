@@ -26,8 +26,10 @@ func TestSaveLoad(t *testing.T) {
 		Name:          "myapp",
 		ProviderType:  "gcp",
 		Instance: InstanceState{
-			ID:   "projects/p/zones/z/instances/mutapod-myapp",
-			Name: "mutapod-myapp",
+			ID:                "projects/p/zones/z/instances/mutapod-myapp",
+			Name:              "mutapod-myapp",
+			TargetScope:       "gcp|projects/p/zones/z/instances/mutapod-myapp",
+			ConfigFingerprint: "v1-abc",
 		},
 		SSH: SSHState{
 			Host: "mutapod-myapp.us-central1-a.my-project",
@@ -61,6 +63,12 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if loaded.Instance.ID != s.Instance.ID {
 		t.Errorf("Instance.ID: got %q", loaded.Instance.ID)
+	}
+	if loaded.Instance.ConfigFingerprint != "v1-abc" {
+		t.Errorf("Instance.ConfigFingerprint: got %q", loaded.Instance.ConfigFingerprint)
+	}
+	if loaded.Instance.TargetScope != s.Instance.TargetScope {
+		t.Errorf("Instance.TargetScope: got %q", loaded.Instance.TargetScope)
 	}
 	if loaded.SSH.Host != s.SSH.Host {
 		t.Errorf("SSH.Host: got %q", loaded.SSH.Host)

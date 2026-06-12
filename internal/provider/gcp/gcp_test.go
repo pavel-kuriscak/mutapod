@@ -116,7 +116,12 @@ func TestEnsureInstance_AlreadyRunning(t *testing.T) {
 
 func TestEnsureInstance_CreateNew(t *testing.T) {
 	f := shell.NewFakeCommander()
-	instanceName := testConfig().InstanceName()
+	cfg := testConfig()
+	instanceName := cfg.InstanceName()
+	fingerprint, err := cfg.VMConfigFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
 	// First call returns not found
 	f.StubErr(errors.New("was not found"),
 		"gcloud", "compute", "instances", "describe", instanceName,
@@ -125,7 +130,7 @@ func TestEnsureInstance_CreateNew(t *testing.T) {
 		"--format", "json(status)",
 	)
 
-	p := New(testConfig(), f)
+	p := New(cfg, f)
 
 	// After create, State will be called again in waitForRunning.
 	// The second describe call has the same key, so let's patch f to return RUNNING on second call.
@@ -147,7 +152,7 @@ func TestEnsureInstance_CreateNew(t *testing.T) {
 		"--boot-disk-type", "pd-balanced",
 		"--image-family", "ubuntu-2204-lts",
 		"--image-project", "ubuntu-os-cloud",
-		"--labels", "managed-by=mutapod",
+		"--labels", "managed-by=mutapod,mutapod-config="+fingerprint,
 		"--format", "json",
 	) {
 		t.Error("expected gcloud instances create to be called with correct args")
@@ -371,8 +376,50 @@ func TestCopyFile_RequiresSSHConfig(t *testing.T) {
 func TestInstanceID(t *testing.T) {
 	p := New(testConfig(), shell.NewFakeCommander())
 	want := "projects/my-project/zones/us-central1-a/instances/" + testConfig().InstanceName()
-	if got := p.InstanceID(); got != want {
+	got, err := p.InstanceID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Errorf("InstanceID: got %q, want %q", got, want)
+	}
+}
+
+func TestInstanceMetadata(t *testing.T) {
+	cfg := testConfig()
+	f := shell.NewFakeCommander()
+	f.Stub(`{"labels":{"managed-by":"mutapod","mutapod-config":"v1-abc"}}`, "gcloud",
+		"compute", "instances", "describe", cfg.InstanceName(),
+		"--project", "my-project",
+		"--zone", "us-central1-a",
+		"--format", "json(labels)",
+	)
+
+	metadata, err := New(cfg, f).InstanceMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ConfigFingerprint != "v1-abc" {
+		t.Fatalf("fingerprint: got %q", metadata.ConfigFingerprint)
+	}
+	if metadata.ID != "projects/my-project/zones/us-central1-a/instances/"+cfg.InstanceName() {
+		t.Fatalf("ID: got %q", metadata.ID)
+	}
+}
+
+func TestAdoptInstance(t *testing.T) {
+	cfg := testConfig()
+	f := shell.NewFakeCommander()
+
+	if err := New(cfg, f).AdoptInstance(context.Background(), "v1-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.CalledWith("gcloud", "compute", "instances", "add-labels", cfg.InstanceName(),
+		"--project", "my-project",
+		"--zone", "us-central1-a",
+		"--labels", "mutapod-config=v1-abc",
+	) {
+		t.Fatalf("unexpected calls: %#v", f.Calls)
 	}
 }
 

@@ -165,9 +165,17 @@ func validate(cfg *Config) error {
 		if cfg.Provider.GCP.Project == "" {
 			return fmt.Errorf("config: 'provider.gcp.project' is required")
 		}
+		if _, exists := cfg.Provider.GCP.Labels[VMConfigFingerprintKey]; exists {
+			return fmt.Errorf("config: provider.gcp.labels key %q is reserved by mutapod", VMConfigFingerprintKey)
+		}
 	case "azure":
 		if cfg.Provider.Azure.ResourceGroup == "" {
 			return fmt.Errorf("config: 'provider.azure.resource_group' is required")
+		}
+		for key := range cfg.Provider.Azure.Tags {
+			if strings.EqualFold(key, VMConfigFingerprintKey) {
+				return fmt.Errorf("config: provider.azure.tags key %q is reserved by mutapod", VMConfigFingerprintKey)
+			}
 		}
 	default:
 		return fmt.Errorf("config: unsupported provider type %q (supported: gcp, azure)", cfg.Provider.Type)

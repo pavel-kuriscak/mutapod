@@ -138,24 +138,14 @@ func isTransientDialError(err error) bool {
 		strings.Contains(msg, "eof")
 }
 
-// TrustHost scans the remote server's host key and appends it to knownHostsFile
-// under hostAlias. This lets external tools (e.g. mutagen) verify the host
-// without ever having connected via an interactive SSH client.
-// If the alias is already present in the file it does nothing.
+// TrustHost scans the remote server's host key and stores it in knownHostsFile
+// under hostAlias. Existing entries for the alias are replaced when a recreated
+// VM presents a different host key; unrelated entries are preserved.
 //
 // The SSH host key is exchanged before user authentication. On a fresh GCP VM
 // the daemon may already be reachable while the injected SSH key is still
 // propagating, so we treat "captured host key, auth failed" as success.
 func (c *Client) TrustHost(knownHostsFile, hostAlias string) error {
-	// Check if already present.
-	if data, err := os.ReadFile(knownHostsFile); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, hostAlias+" ") {
-				return nil // already trusted
-			}
-		}
-	}
-
 	keyData, err := os.ReadFile(c.identityFile)
 	if err != nil {
 		return fmt.Errorf("sshrun: read identity file: %w", err)
@@ -199,13 +189,59 @@ func (c *Client) TrustHost(knownHostsFile, hostAlias string) error {
 	if err := os.MkdirAll(filepath.Dir(knownHostsFile), 0700); err != nil {
 		return fmt.Errorf("sshrun: create known_hosts dir: %w", err)
 	}
-	f, err := os.OpenFile(knownHostsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("sshrun: open known_hosts %s: %w", knownHostsFile, err)
+
+	var existing []byte
+	if data, err := os.ReadFile(knownHostsFile); err == nil {
+		existing = data
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("sshrun: read known_hosts %s: %w", knownHostsFile, err)
 	}
-	defer f.Close()
-	_, err = fmt.Fprintln(f, knownhosts.Line([]string{hostAlias}, captured))
-	return err
+
+	entry := knownhosts.Line([]string{hostAlias}, captured)
+	updated := replaceKnownHostAlias(existing, hostAlias, entry)
+	if string(existing) == updated {
+		return nil
+	}
+	if err := os.WriteFile(knownHostsFile, []byte(updated), 0600); err != nil {
+		return fmt.Errorf("sshrun: write known_hosts %s: %w", knownHostsFile, err)
+	}
+	return nil
+}
+
+func replaceKnownHostAlias(existing []byte, hostAlias, entry string) string {
+	text := strings.ReplaceAll(string(existing), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if !knownHostsLineContainsAlias(line, hostAlias) {
+			filtered = append(filtered, line)
+		}
+	}
+	filtered = append(filtered, entry)
+	return strings.Join(filtered, "\n") + "\n"
+}
+
+func knownHostsLineContainsAlias(line, hostAlias string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return false
+	}
+	hostField := fields[0]
+	if strings.HasPrefix(hostField, "@") {
+		if len(fields) < 3 {
+			return false
+		}
+		hostField = fields[1]
+	}
+	for _, host := range strings.Split(hostField, ",") {
+		if host == hostAlias {
+			return true
+		}
+	}
+	return false
 }
 
 // Upload copies a local file to remotePath on the remote host by piping

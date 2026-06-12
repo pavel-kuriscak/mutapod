@@ -21,12 +21,14 @@ type State struct {
 }
 
 type InstanceState struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	LastKnownIP   string    `json:"last_known_ip"`
-	Status        string    `json:"status"` // last observed InstanceState string
-	CreatedAt     time.Time `json:"created_at,omitempty"`
-	LastStartedAt time.Time `json:"last_started_at,omitempty"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	TargetScope       string    `json:"target_scope,omitempty"`
+	ConfigFingerprint string    `json:"config_fingerprint,omitempty"`
+	LastKnownIP       string    `json:"last_known_ip"`
+	Status            string    `json:"status"` // last observed InstanceState string
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	LastStartedAt     time.Time `json:"last_started_at,omitempty"`
 }
 
 type SSHState struct {

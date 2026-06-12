@@ -97,7 +97,12 @@ func TestEnsureInstance_CreateNew(t *testing.T) {
 	}
 
 	f := shell.NewFakeCommander()
-	instanceName := testConfig().InstanceName()
+	cfg := testConfig()
+	instanceName := cfg.InstanceName()
+	fingerprint, err := cfg.VMConfigFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.StubErr(errors.New("not found"), "az",
 		"vm", "show",
 		"--resource-group", "rg-dev",
@@ -108,7 +113,7 @@ func TestEnsureInstance_CreateNew(t *testing.T) {
 		"--subscription", "sub-123",
 	)
 
-	p := New(testConfig(), f)
+	p := New(cfg, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, _ = p.EnsureInstance(ctx)
@@ -130,7 +135,7 @@ func TestEnsureInstance_CreateNew(t *testing.T) {
 		"--ssh-key-values", "@"+publicKey,
 		"--vnet-name", "dev-vnet",
 		"--subnet", "dev-subnet",
-		"--tags", "managed-by=mutapod",
+		"--tags", "managed-by=mutapod", "mutapod-config="+fingerprint,
 		"--subscription", "sub-123",
 		"--output", "json",
 	) {
@@ -154,6 +159,10 @@ func TestEnsureInstance_CreateNewWithPublicIP(t *testing.T) {
 
 	cfg := testConfig()
 	cfg.Provider.Azure.PublicIP = true
+	fingerprint, err := cfg.VMConfigFingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f := shell.NewFakeCommander()
 	instanceName := cfg.InstanceName()
@@ -189,7 +198,7 @@ func TestEnsureInstance_CreateNewWithPublicIP(t *testing.T) {
 		"--ssh-key-values", "@"+publicKey,
 		"--vnet-name", "dev-vnet",
 		"--subnet", "dev-subnet",
-		"--tags", "managed-by=mutapod",
+		"--tags", "managed-by=mutapod", "mutapod-config="+fingerprint,
 		"--subscription", "sub-123",
 		"--output", "json",
 	) {
@@ -364,6 +373,58 @@ func TestEnsureSSHNSGRuleCreatesRuleWhenMissing(t *testing.T) {
 	}
 }
 
+func TestEnsureSSHNSGRuleUpdatesExistingRule(t *testing.T) {
+	cfg := testConfig()
+	cfg.Provider.Azure.SSHSources = []string{"10.130.1.0/27", "10.130.2.0/27"}
+	f := shell.NewFakeCommander()
+	instanceName := cfg.InstanceName()
+
+	p := New(cfg, f)
+	if err := p.ensureSSHNSGRule(context.Background()); err != nil {
+		t.Fatalf("ensureSSHNSGRule: %v", err)
+	}
+
+	if !f.CalledWith("az",
+		"network", "nsg", "rule", "update",
+		"--resource-group", "rg-dev",
+		"--nsg-name", instanceName+"NSG",
+		"--name", "mutapod-ssh",
+		"--priority", "1000",
+		"--direction", "Inbound",
+		"--access", "Allow",
+		"--protocol", "Tcp",
+		"--source-address-prefixes", "10.130.1.0/27", "10.130.2.0/27",
+		"--source-port-ranges", "*",
+		"--destination-address-prefixes", "*",
+		"--destination-port-ranges", "22",
+		"--description", "Allow mutapod SSH from configured private sources",
+		"--subscription", "sub-123",
+	) {
+		t.Fatalf("expected NSG rule update, got %#v", f.Calls)
+	}
+}
+
+func TestEnsureSSHNSGRuleRemovesManagedRuleWhenSourcesEmpty(t *testing.T) {
+	cfg := testConfig()
+	f := shell.NewFakeCommander()
+	instanceName := cfg.InstanceName()
+
+	p := New(cfg, f)
+	if err := p.ensureSSHNSGRule(context.Background()); err != nil {
+		t.Fatalf("ensureSSHNSGRule: %v", err)
+	}
+
+	if !f.CalledWith("az",
+		"network", "nsg", "rule", "delete",
+		"--resource-group", "rg-dev",
+		"--nsg-name", instanceName+"NSG",
+		"--name", "mutapod-ssh",
+		"--subscription", "sub-123",
+	) {
+		t.Fatalf("expected managed NSG rule delete, got %#v", f.Calls)
+	}
+}
+
 func TestIsSSHStartupErrorTreatsWindowsConnectTimeoutAsTransient(t *testing.T) {
 	err := errors.New("sshrun: connect to capture host key: dial tcp 10.150.170.36:22: connectex: A connection attempt failed because the connected party did not properly respond after a period of time")
 	if !isSSHStartupError(err) {
@@ -410,8 +471,68 @@ func TestEnsureSSHConfigEntryReplacesExistingBlock(t *testing.T) {
 func TestInstanceID(t *testing.T) {
 	p := New(testConfig(), shell.NewFakeCommander())
 	want := "/subscriptions/sub-123/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/" + testConfig().InstanceName()
-	if got := p.InstanceID(); got != want {
+	got, err := p.InstanceID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
 		t.Errorf("InstanceID: got %q, want %q", got, want)
+	}
+}
+
+func TestInstanceIDUsesActiveSubscription(t *testing.T) {
+	cfg := testConfig()
+	cfg.Provider.Azure.Subscription = ""
+	f := shell.NewFakeCommander()
+	f.Stub("active-sub\n", "az", "account", "show", "--query", "id", "--output", "tsv")
+
+	got, err := New(cfg, f).InstanceID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/subscriptions/active-sub/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/" + cfg.InstanceName()
+	if got != want {
+		t.Fatalf("InstanceID: got %q, want %q", got, want)
+	}
+}
+
+func TestInstanceMetadata(t *testing.T) {
+	cfg := testConfig()
+	f := shell.NewFakeCommander()
+	resourceID := "/subscriptions/sub-123/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/" + cfg.InstanceName()
+	f.Stub(`{"id":"`+resourceID+`","tags":{"managed-by":"mutapod","MUTAPOD-CONFIG":"v1-abc"}}`, "az",
+		"vm", "show",
+		"--resource-group", "rg-dev",
+		"--name", cfg.InstanceName(),
+		"--query", "{id:id,tags:tags}",
+		"--output", "json",
+		"--subscription", "sub-123",
+	)
+
+	metadata, err := New(cfg, f).InstanceMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ID != resourceID || metadata.ConfigFingerprint != "v1-abc" {
+		t.Fatalf("unexpected metadata: %#v", metadata)
+	}
+}
+
+func TestAdoptInstance(t *testing.T) {
+	cfg := testConfig()
+	f := shell.NewFakeCommander()
+	resourceID := "/subscriptions/sub-123/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/" + cfg.InstanceName()
+
+	if err := New(cfg, f).AdoptInstance(context.Background(), "v1-abc"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.CalledWith("az", "tag", "update",
+		"--resource-id", resourceID,
+		"--operation", "Merge",
+		"--tags", "mutapod-config=v1-abc",
+		"--subscription", "sub-123",
+	) {
+		t.Fatalf("unexpected calls: %#v", f.Calls)
 	}
 }
 

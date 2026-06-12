@@ -368,6 +368,16 @@ func TestLoad_Validation(t *testing.T) {
 			yaml:    "name: x\nprovider:\n  type: gcp\n  gcp:\n    project: p\ncompose:\n  reverse_forwards: [0]\n",
 			wantErr: "compose.reverse_forwards contains invalid port 0",
 		},
+		{
+			name:    "reserved GCP fingerprint label",
+			yaml:    "name: x\nprovider:\n  type: gcp\n  gcp:\n    project: p\n    labels:\n      mutapod-config: custom\n",
+			wantErr: "is reserved by mutapod",
+		},
+		{
+			name:    "reserved Azure fingerprint tag",
+			yaml:    "name: x\nprovider:\n  type: azure\n  azure:\n    resource_group: rg\n    tags:\n      MUTAPOD-CONFIG: custom\n",
+			wantErr: "is reserved by mutapod",
+		},
 	}
 
 	for _, tt := range tests {

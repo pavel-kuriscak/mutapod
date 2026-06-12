@@ -35,6 +35,8 @@ func upCmd() *cobra.Command {
 		RunE:  runUp,
 	}
 	cmd.Flags().Bool("build", false, "force docker compose to rebuild images before starting services")
+	cmd.Flags().Bool("replace", false, "approve VM replacement when its declarative configuration changed")
+	cmd.Flags().Bool("adopt", false, "adopt an existing legacy VM without recreating it")
 	return cmd
 }
 
@@ -49,15 +51,32 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	replaceVM, err := cmd.Flags().GetBool("replace")
+	if err != nil {
+		return err
+	}
+	adoptVM, err := cmd.Flags().GetBool("adopt")
+	if err != nil {
+		return err
+	}
+	if replaceVM && adoptVM {
+		return fmt.Errorf("--replace and --adopt cannot be used together")
+	}
 
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	return runUpWithConfig(ctx, cfg, launchMode, buildImages)
+	return runUpWithConfig(ctx, cfg, launchMode, buildImages, vmUpOptions{
+		Replace:     replaceVM,
+		Adopt:       adoptVM,
+		Interactive: isTerminal(os.Stdin) && isTerminal(os.Stdout),
+		In:          os.Stdin,
+		Out:         os.Stdout,
+	})
 }
 
-func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.LaunchMode, buildImages bool) error {
+func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.LaunchMode, buildImages bool, vmOpts vmUpOptions) error {
 	step("Loaded config: %s (%s)", cfg.Name, cfg.Provider.Type)
 
 	if err := confirmMissingIgnoreFile(os.Stdin, os.Stdout, cfg); err != nil {
@@ -88,12 +107,29 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 		return err
 	}
 
+	st, err = prepareDeclarativeVM(ctx, cfg, prov, st, vmOpts)
+	if err != nil {
+		return err
+	}
+
 	step("Ensuring VM is running...")
 	instanceState, err := prov.EnsureInstance(ctx)
 	if err != nil {
 		return err
 	}
 	ok("VM running: %s (%s)", cfg.InstanceName(), instanceState)
+
+	instanceMetadata, err := prov.InstanceMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	desiredFingerprint, err := cfg.VMConfigFingerprint()
+	if err != nil {
+		return err
+	}
+	if instanceMetadata.ConfigFingerprint != desiredFingerprint {
+		return fmt.Errorf("VM configuration fingerprint was not applied correctly")
+	}
 
 	step("Configuring SSH access...")
 	sshCfg, err := prov.SSHConfig(ctx)
@@ -410,7 +446,10 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 
 	st.Name = cfg.Name
 	st.ProviderType = cfg.Provider.Type
+	st.Instance.ID = instanceMetadata.ID
 	st.Instance.Name = cfg.InstanceName()
+	st.Instance.TargetScope = targetScope(cfg, instanceMetadata.ID)
+	st.Instance.ConfigFingerprint = instanceMetadata.ConfigFingerprint
 	st.Instance.LastKnownIP = sshCfg.IP
 	st.Instance.Status = string(instanceState)
 	st.SSH = state.SSHState{
@@ -578,9 +617,29 @@ func statusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			configStatus := "absent"
+			if instanceState != provider.StateNotFound {
+				metadata, err := prov.InstanceMetadata(ctx)
+				if err != nil {
+					return err
+				}
+				desiredFingerprint, err := cfg.VMConfigFingerprint()
+				if err != nil {
+					return err
+				}
+				switch {
+				case metadata.ConfigFingerprint == "":
+					configStatus = "legacy/untracked"
+				case metadata.ConfigFingerprint != desiredFingerprint:
+					configStatus = "replacement required"
+				default:
+					configStatus = "current"
+				}
+			}
 			fmt.Printf("Workspace:  %s\n", cfg.Name)
 			fmt.Printf("Provider:   %s\n", cfg.Provider.Type)
 			fmt.Printf("VM:         %s (%s)\n", cfg.InstanceName(), instanceState)
+			fmt.Printf("VM config:  %s\n", configStatus)
 			if st.SSH.Host != "" {
 				fmt.Printf("SSH host:   %s\n", st.SSH.Host)
 			}

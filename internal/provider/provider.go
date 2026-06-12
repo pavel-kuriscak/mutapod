@@ -29,6 +29,13 @@ type SSHConfig struct {
 	IdentityFile string
 }
 
+// InstanceMetadata contains the cloud-side metadata used to decide whether an
+// existing VM matches the desired declarative configuration.
+type InstanceMetadata struct {
+	ID                string
+	ConfigFingerprint string
+}
+
 // ExecOptions controls how a remote command is run.
 type ExecOptions struct {
 	Stdin  io.Reader
@@ -56,6 +63,17 @@ type Provider interface {
 
 	// State returns the current lifecycle state without mutating anything.
 	State(ctx context.Context) (InstanceState, error)
+
+	// InstanceMetadata returns the existing VM's full resource ID and the
+	// mutapod configuration fingerprint stored on it.
+	InstanceMetadata(ctx context.Context) (InstanceMetadata, error)
+
+	// AdoptInstance stamps fingerprint onto an existing legacy VM without
+	// recreating it.
+	AdoptInstance(ctx context.Context, fingerprint string) error
+
+	// InstanceID returns the full resource ID for the configured cloud target.
+	InstanceID(ctx context.Context) (string, error)
 
 	// SSHConfig returns the parameters needed to SSH into the instance.
 	// May run a cloud CLI command to inject the host into ~/.ssh/config.

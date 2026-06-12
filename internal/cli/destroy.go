@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -142,13 +140,7 @@ func printDestroySummary(cfg *config.Config, instanceState provider.InstanceStat
 }
 
 func confirmDestroy(in io.Reader, out io.Writer, instanceName string) (bool, error) {
-	fmt.Fprintf(out, "Type %q to destroy this VM: ", instanceName)
-
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, fmt.Errorf("read confirmation: %w", err)
-	}
-	return strings.TrimSpace(line) == instanceName, nil
+	return confirmYesNo(in, out, fmt.Sprintf("Delete VM %q? [y/N]: ", instanceName))
 }
 
 func otherWorkspaceLeases(currentWorkspace string, leases []idle.LeaseInfo) []idle.LeaseInfo {

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func TestTrustHostSucceedsWhenHostKeyCapturedBeforeAuthReady(t *testing.T) {
@@ -60,6 +61,88 @@ func TestTrustHostSucceedsWhenHostKeyCapturedBeforeAuthReady(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestTrustHostReplacesStaleAliasAndPreservesOtherHosts(t *testing.T) {
+	hostSigner := mustGenerateSigner(t)
+	serverConfig := &gossh.ServerConfig{
+		PublicKeyCallback: func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
+			return nil, errors.New("auth not ready")
+		},
+	}
+	serverConfig.AddHostKey(hostSigner)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _, _, _ = gossh.NewServerConn(conn, serverConfig)
+	}()
+
+	identityFile := filepath.Join(t.TempDir(), "id_test")
+	writePrivateKeyFile(t, identityFile)
+	knownHostsFile := filepath.Join(t.TempDir(), "known_hosts")
+	staleSigner := mustGenerateSigner(t)
+	staleLine := knownhosts.Line([]string{"vm-alias"}, staleSigner.PublicKey())
+	otherLine := knownhosts.Line([]string{"other-host"}, staleSigner.PublicKey())
+	if err := os.WriteFile(knownHostsFile, []byte(otherLine+"\n"+staleLine+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := New("127.0.0.1", listener.Addr().(*net.TCPAddr).Port, "tester", identityFile)
+	if err := client.TrustHost(knownHostsFile, "vm-alias"); err != nil {
+		t.Fatalf("TrustHost: %v", err)
+	}
+
+	data, err := os.ReadFile(knownHostsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	currentLine := knownhosts.Line([]string{"vm-alias"}, hostSigner.PublicKey())
+	if strings.Contains(text, staleLine) {
+		t.Fatalf("stale alias entry was preserved:\n%s", text)
+	}
+	if !strings.Contains(text, currentLine) {
+		t.Fatalf("current alias entry missing:\n%s", text)
+	}
+	if !strings.Contains(text, otherLine) {
+		t.Fatalf("unrelated host entry was removed:\n%s", text)
+	}
+	if strings.Count(text, "vm-alias ") != 1 {
+		t.Fatalf("expected exactly one alias entry:\n%s", text)
+	}
+
+	<-done
+}
+
+func TestReplaceKnownHostAliasRecognizesMarkerAndHostLists(t *testing.T) {
+	existing := strings.Join([]string{
+		"@cert-authority vm-alias,other-host ssh-ed25519 old",
+		"unrelated ssh-ed25519 keep",
+		"",
+	}, "\n")
+
+	got := replaceKnownHostAlias([]byte(existing), "vm-alias", "vm-alias ssh-ed25519 new")
+	if strings.Contains(got, "old") {
+		t.Fatalf("stale marked entry remains:\n%s", got)
+	}
+	if !strings.Contains(got, "unrelated ssh-ed25519 keep") {
+		t.Fatalf("unrelated entry removed:\n%s", got)
+	}
+	if !strings.Contains(got, "vm-alias ssh-ed25519 new") {
+		t.Fatalf("replacement entry missing:\n%s", got)
+	}
 }
 
 func TestIsTransientDialError(t *testing.T) {

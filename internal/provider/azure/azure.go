@@ -3,6 +3,7 @@ package azure
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -142,6 +143,10 @@ func (p *Provider) EnsureInstance(ctx context.Context) (provider.InstanceState, 
 
 func (p *Provider) createVM(ctx context.Context) error {
 	az := p.cfg.Provider.Azure
+	fingerprint, err := p.cfg.VMConfigFingerprint()
+	if err != nil {
+		return err
+	}
 	identityFile, err := p.identityFile()
 	if err != nil {
 		return err
@@ -192,9 +197,10 @@ func (p *Provider) createVM(ctx context.Context) error {
 	if az.Identity != "" {
 		args = append(args, "--assign-identity", az.Identity)
 	}
-	if len(az.Tags) > 0 {
+	tags := withConfigFingerprint(az.Tags, fingerprint)
+	if len(tags) > 0 {
 		args = append(args, "--tags")
-		args = append(args, formatTags(az.Tags)...)
+		args = append(args, formatTags(tags)...)
 	}
 	args = p.withSubscription(args)
 	args = append(args, "--output", "json")
@@ -214,10 +220,6 @@ func (p *Provider) startVM(ctx context.Context) error {
 
 func (p *Provider) ensureSSHNSGRule(ctx context.Context) error {
 	az := p.cfg.Provider.Azure
-	if len(az.SSHSources) == 0 {
-		return nil
-	}
-
 	args := p.withSubscription([]string{
 		"network", "nsg", "rule", "show",
 		"--resource-group", az.ResourceGroup,
@@ -225,14 +227,31 @@ func (p *Provider) ensureSSHNSGRule(ctx context.Context) error {
 		"--name", "mutapod-ssh",
 		"--output", "none",
 	})
-	if err := p.cmd.Run(ctx, shell.RunOptions{}, "az", args...); err == nil {
-		return nil
-	} else if !isNotFound(err) {
+	err := p.cmd.Run(ctx, shell.RunOptions{}, "az", args...)
+	ruleExists := err == nil
+	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("azure: inspect SSH NSG rule: %w", err)
 	}
 
+	if len(az.SSHSources) == 0 {
+		if !ruleExists {
+			return nil
+		}
+		args = p.withSubscription([]string{
+			"network", "nsg", "rule", "delete",
+			"--resource-group", az.ResourceGroup,
+			"--nsg-name", p.nsgName(),
+			"--name", "mutapod-ssh",
+		})
+		return p.cmd.Run(ctx, shell.RunOptions{}, "az", args...)
+	}
+
+	action := "create"
+	if ruleExists {
+		action = "update"
+	}
 	args = []string{
-		"network", "nsg", "rule", "create",
+		"network", "nsg", "rule", action,
 		"--resource-group", az.ResourceGroup,
 		"--nsg-name", p.nsgName(),
 		"--name", "mutapod-ssh",
@@ -467,13 +486,73 @@ func (p *Provider) DeleteInstance(ctx context.Context) error {
 	return p.cmd.Run(ctx, shell.RunOptions{}, "az", args...)
 }
 
-// InstanceID returns the Azure resource ID for the VM when subscription is set.
-func (p *Provider) InstanceID() string {
+// InstanceMetadata returns the VM resource ID and stored config fingerprint.
+func (p *Provider) InstanceMetadata(ctx context.Context) (provider.InstanceMetadata, error) {
 	az := p.cfg.Provider.Azure
-	if az.Subscription == "" {
-		return fmt.Sprintf("resourceGroups/%s/providers/Microsoft.Compute/virtualMachines/%s", az.ResourceGroup, p.name)
+	args := p.withSubscription([]string{
+		"vm", "show",
+		"--resource-group", az.ResourceGroup,
+		"--name", p.name,
+		"--query", "{id:id,tags:tags}",
+		"--output", "json",
+	})
+	out, err := p.cmd.Output(ctx, shell.RunOptions{}, "az", args...)
+	if err != nil {
+		return provider.InstanceMetadata{}, fmt.Errorf("azure: show VM metadata: %w", err)
 	}
-	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/virtualMachines/%s", az.Subscription, az.ResourceGroup, p.name)
+	var result struct {
+		ID   string            `json:"id"`
+		Tags map[string]string `json:"tags"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return provider.InstanceMetadata{}, fmt.Errorf("azure: parse VM metadata: %w", err)
+	}
+	fingerprint := ""
+	for key, value := range result.Tags {
+		if strings.EqualFold(key, config.VMConfigFingerprintKey) {
+			fingerprint = value
+			break
+		}
+	}
+	return provider.InstanceMetadata{
+		ID:                result.ID,
+		ConfigFingerprint: fingerprint,
+	}, nil
+}
+
+// AdoptInstance stamps the desired config fingerprint onto an existing VM.
+func (p *Provider) AdoptInstance(ctx context.Context, fingerprint string) error {
+	id, err := p.InstanceID(ctx)
+	if err != nil {
+		return err
+	}
+	args := p.withSubscription([]string{
+		"tag", "update",
+		"--resource-id", id,
+		"--operation", "Merge",
+		"--tags", config.VMConfigFingerprintKey + "=" + fingerprint,
+	})
+	return p.cmd.Run(ctx, shell.RunOptions{}, "az", args...)
+}
+
+// InstanceID returns the Azure resource ID for the configured target.
+func (p *Provider) InstanceID(ctx context.Context) (string, error) {
+	az := p.cfg.Provider.Azure
+	subscription := strings.TrimSpace(az.Subscription)
+	if subscription == "" {
+		out, err := p.cmd.Output(ctx, shell.RunOptions{}, "az", "account", "show",
+			"--query", "id",
+			"--output", "tsv",
+		)
+		if err != nil {
+			return "", fmt.Errorf("azure: resolve active subscription: %w", err)
+		}
+		subscription = strings.TrimSpace(string(out))
+		if subscription == "" {
+			return "", fmt.Errorf("azure: active subscription ID is empty")
+		}
+	}
+	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/virtualMachines/%s", subscription, az.ResourceGroup, p.name), nil
 }
 
 func (p *Provider) withSubscription(args []string) []string {
@@ -643,6 +722,15 @@ func formatTags(tags map[string]string) []string {
 		values = append(values, key+"="+tags[key])
 	}
 	return values
+}
+
+func withConfigFingerprint(tags map[string]string, fingerprint string) map[string]string {
+	result := make(map[string]string, len(tags)+1)
+	for key, value := range tags {
+		result[key] = value
+	}
+	result[config.VMConfigFingerprintKey] = fingerprint
+	return result
 }
 
 func isNotFound(err error) bool {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -135,6 +136,10 @@ func (p *Provider) EnsureInstance(ctx context.Context) (provider.InstanceState, 
 
 func (p *Provider) createInstance(ctx context.Context) error {
 	gcp := p.cfg.Provider.GCP
+	fingerprint, err := p.cfg.VMConfigFingerprint()
+	if err != nil {
+		return err
+	}
 	args := []string{
 		"compute", "instances", "create", p.name,
 		"--project", gcp.Project,
@@ -162,8 +167,9 @@ func (p *Provider) createInstance(ctx context.Context) error {
 	} else if gcp.Preemptible {
 		args = append(args, "--preemptible")
 	}
-	if len(gcp.Labels) > 0 {
-		args = append(args, "--labels", formatLabels(gcp.Labels))
+	labels := withConfigFingerprint(gcp.Labels, fingerprint)
+	if len(labels) > 0 {
+		args = append(args, "--labels", formatLabels(labels))
 	}
 	args = append(args, "--format", "json")
 
@@ -596,10 +602,47 @@ func (p *Provider) DeleteInstance(ctx context.Context) error {
 	)
 }
 
+// InstanceMetadata returns the instance resource ID and stored config fingerprint.
+func (p *Provider) InstanceMetadata(ctx context.Context) (provider.InstanceMetadata, error) {
+	out, err := p.cmd.Output(ctx, shell.RunOptions{}, "gcloud", "compute", "instances", "describe",
+		p.name,
+		"--project", p.cfg.Provider.GCP.Project,
+		"--zone", p.cfg.Provider.GCP.Zone,
+		"--format", "json(labels)",
+	)
+	if err != nil {
+		return provider.InstanceMetadata{}, fmt.Errorf("gcp: describe instance metadata: %w", err)
+	}
+	var result struct {
+		Labels map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return provider.InstanceMetadata{}, fmt.Errorf("gcp: parse instance metadata: %w", err)
+	}
+	id, err := p.InstanceID(ctx)
+	if err != nil {
+		return provider.InstanceMetadata{}, err
+	}
+	return provider.InstanceMetadata{
+		ID:                id,
+		ConfigFingerprint: result.Labels[config.VMConfigFingerprintKey],
+	}, nil
+}
+
+// AdoptInstance stamps the desired config fingerprint onto an existing VM.
+func (p *Provider) AdoptInstance(ctx context.Context, fingerprint string) error {
+	return p.cmd.Run(ctx, shell.RunOptions{}, "gcloud", "compute", "instances", "add-labels",
+		p.name,
+		"--project", p.cfg.Provider.GCP.Project,
+		"--zone", p.cfg.Provider.GCP.Zone,
+		"--labels", config.VMConfigFingerprintKey+"="+fingerprint,
+	)
+}
+
 // InstanceID returns the full GCP resource name of the instance.
-func (p *Provider) InstanceID() string {
+func (p *Provider) InstanceID(context.Context) (string, error) {
 	gcp := p.cfg.Provider.GCP
-	return fmt.Sprintf("projects/%s/zones/%s/instances/%s", gcp.Project, gcp.Zone, p.name)
+	return fmt.Sprintf("projects/%s/zones/%s/instances/%s", gcp.Project, gcp.Zone, p.name), nil
 }
 
 func formatLabels(labels map[string]string) string {
@@ -607,7 +650,17 @@ func formatLabels(labels map[string]string) string {
 	for k, v := range labels {
 		parts = append(parts, k+"="+v)
 	}
+	sort.Strings(parts)
 	return strings.Join(parts, ",")
+}
+
+func withConfigFingerprint(labels map[string]string, fingerprint string) map[string]string {
+	result := make(map[string]string, len(labels)+1)
+	for key, value := range labels {
+		result[key] = value
+	}
+	result[config.VMConfigFingerprintKey] = fingerprint
+	return result
 }
 
 func isNotFound(err error) bool {

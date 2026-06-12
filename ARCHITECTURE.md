@@ -188,66 +188,71 @@ specialised package.
 5.  deps.MutagenPath()                       — download mutagen if needed
 6.  state.Load(cfg.Name)                     — read ~/.mutapod/state/<n>.json
 7.  provider.New(cfg, ...)                   — registry lookup → cloud Provider
-8.  prov.EnsureInstance(ctx)                 — create or start VM
-9.  prov.SSHConfig(ctx)                      — provider-specific SSH setup:
+8.  prepareDeclarativeVM(...)                — compare the normalized desired
+                                               VM fingerprint with cloud
+                                               metadata; adopt, prompt for
+                                               replacement, or preserve a VM
+                                               in a previous cloud target
+9.  prov.EnsureInstance(ctx)                 — create or start VM
+10. prov.SSHConfig(ctx)                      — provider-specific SSH setup:
                                                GCP runs config-ssh and parses
                                                the generated entry; Azure
                                                queries VM IP and writes its own
                                                Host block; both TrustHost()
                                                for noninteractive access
-10. profiles.Active(cfg)                     — detect codex/claude
-11. bootstrap.Run(ctx, prov)                 — upload + run bootstrap.sh
-12. ensureRemoteWorkspace(...)               — mkdir + chown /workspace/<n>
-13. ensureRemoteProfilePaths(...)            — for each profile: mkdir +
+11. profiles.Active(cfg)                     — detect codex/claude
+12. bootstrap.Run(ctx, prov)                 — upload + run bootstrap.sh
+13. ensureRemoteWorkspace(...)               — mkdir + chown /workspace/<n>
+14. ensureRemoteProfilePaths(...)            — for each profile: mkdir +
                                                chown sync + tool dirs
-14. mutagensync.DaemonStart(...)             — `mutagen daemon start`
-15. EnsureSync                               — recreate if IP changed,
+15. mutagensync.DaemonStart(...)             — `mutagen daemon start`
+16. EnsureSync                               — recreate if IP changed,
                                                ignore-rules changed, or
                                                session-config signature
                                                changed; otherwise resume
-16. waitForInitialSync(...)                  — flush + verify ready + wait
+17. waitForInitialSync(...)                  — flush + verify ready + wait
                                                for the remote compose file
                                                to appear
-17. Per-profile SidecarSession.Ensure        — same logic, plus the
+18. Per-profile SidecarSession.Ensure        — same logic, plus the
                                                supplemental claude-homefile
                                                sync that bridges
                                                ~/.claude.json
-18. removeRemoteWorkspaceWrapper(...)        — delete the .code-workspace
+19. removeRemoteWorkspaceWrapper(...)        — delete the .code-workspace
                                                file from the remote so it
                                                doesn't recurse
-19. compose.EnsureRemoteOverride(...)        — render + upload
+20. compose.EnsureRemoteOverride(...)        — render + upload
                                                .mutapod.compose.override.yaml
                                                (workspace bind + profile
                                                bind mounts)
-20. compose.Up(...)                          — `docker compose up -d`,
+21. compose.Up(...)                          — `docker compose up -d`,
                                                adding `-f override.yaml`
                                                when needed
-21. ensureAttachedContainerWorkspaceACLs     — set ACLs so the attached
+22. ensureAttachedContainerWorkspaceACLs     — set ACLs so the attached
                                                container user can write
                                                into the synced workspace
-22. compose.ConfigureGitSafeDirectory(...)   — `git config --system --add
+23. compose.ConfigureGitSafeDirectory(...)   — `git config --system --add
                                                safe.directory '*'` inside
                                                the primary container
-23. profiles.EnsureRemoteTools(...)          — runs each profile's setup
+24. profiles.EnsureRemoteTools(...)          — runs each profile's setup
                                                script in the primary
                                                container (npm install of
                                                codex/claude CLI + wrapper
                                                at /usr/local/bin/<name>)
-24. compose.ParsePorts + EnsureForward       — one mutagen forward per
+25. compose.ParsePorts + EnsureForward       — one mutagen forward per
                                                port, named mutapod-<n>-<p>
-25. EnsureReverseForward (if configured)     — for cfg.Compose.ReverseForwards
-26. state.Save(st)                           — persist everything
-27. dockerctx.EnsureContext(...)             — create/update Docker context
+26. EnsureReverseForward (if configured)     — for cfg.Compose.ReverseForwards
+27. state.Save(st)                           — persist everything
+28. dockerctx.EnsureContext(...)             — create/update Docker context
                                                pointing at ssh://...
-28. vscode.ConfigureWorkspace(...)           — generate
+29. vscode.ConfigureWorkspace(...)           — generate
                                                mutapod.code-workspace
-29. vscode.ConfigureAttachedContainer(...)   — generate the Dev Containers
+30. vscode.ConfigureAttachedContainer(...)   — generate the Dev Containers
                                                imageConfig JSON in user
                                                globalStorage
-30. maybeConfigureIdle(...)                  — install systemd timer,
+31. maybeConfigureIdle(...)                  — install systemd timer,
                                                write lease, start local
                                                heartbeat process
-31. vscode.PrintInstructions + Launch(...)   — open VS Code (attached or
+32. vscode.PrintInstructions + Launch(...)   — open VS Code (attached or
                                                local)
 ```
 
@@ -342,9 +347,10 @@ ends up here.
 | **`google_compute_known_hosts` directory bug** | An earlier bug created the file as a *directory* via `os.MkdirAll(knownHostsFile, ...)`. Fix: `os.MkdirAll(filepath.Dir(knownHostsFile), 0700)`. Verify before writing. |
 | **GCP SSH username** | gcloud doesn't honour the `remote_user` from mutapod.yaml — it provisions keys for the *local* OS user (lowercased, with `DOMAIN\` stripped on Windows). `gcpSSHUsername()` derives this; the parsed `User` from `~/.ssh/config` takes precedence when present. |
 | **Azure private-only default** | Azure VM creation passes `--public-ip-address "" --nsg-rule NONE` unless `provider.azure.public_ip: true` is set. SSH uses the VM private IP by default, so the local machine must have private routing to the target subnet. |
-| **Azure SSH alias** | Azure does not need `az ssh config` for mutapod's noninteractive path. `provider/azure` writes `Host <instance>.azure` with `HostName`, `IdentityFile`, `UserKnownHostsFile`, and `HostKeyAlias`, then trusts the host key in `~/.ssh/known_hosts`. |
+| **Azure SSH alias** | Azure does not need `az ssh config` for mutapod's noninteractive path. `provider/azure` writes `Host <instance>.azure` with `HostName`, `IdentityFile`, `UserKnownHostsFile`, and `HostKeyAlias`, then trusts the host key in `~/.ssh/known_hosts`. `TrustHost` must replace a stale entry for that alias after VM recreation; merely detecting that the alias already exists leaves Mutagen blocked by OpenSSH host-key verification. |
 | **Mutagen text parsing** | v0.18.1 has no JSON output. `parseSyncStatus` and `parseForwardStatus` walk the human-readable lines looking for `Status:` and normalise to a fixed token set. `isNoSessions(err)` recognises the three different "not found" phrasings mutagen has used. |
 | **Session config signature** | `Manager.SessionConfigSignature` hashes the args mutagen would create the session with. When the signature differs from the saved one, the session is terminated and recreated. The version prefix (`v3` currently) is bumped whenever the args list changes structurally; this forces a one-shot recreation on upgrade. |
+| **Declarative VM fingerprint** | `Config.VMConfigFingerprint` hashes a normalized, versioned provider-specific VM spec. GCP stores it in the `mutapod-config` label and Azure in the same-named tag. A mismatch is handled consistently by replacing the VM; legacy VMs can be explicitly adopted. Target project/zone/subscription/resource-group changes preserve the previous VM instead of deleting across scopes. |
 | **Stale-IP recreation** | When the VM IP changes between runs, mutagen sessions encoded with the old endpoint are terminated and recreated rather than resumed. `state.Instance.LastKnownIP` is the source of truth for the comparison. |
 | **Hard-linked `~/.claude.json`** | Mutagen syncs *directories*, not single files. A hard link at `~/.mutapod/profile-links/claude-homefile/claude.json` (same inode as `~/.claude.json`) lets the supplemental sync session sync just that file as if it were in its own directory. The remote bind-mounts the bridged file at `/root/.claude.json`. |
 | **`io.MultiWriter` in debug mode** | When `--debug` is on, `shell.Run` streams stdout/stderr to the user *and* captures it for error inspection. Without this, error matchers like `isNotFound(err)` saw an empty error message and broke. |
