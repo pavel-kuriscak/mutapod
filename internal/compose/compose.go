@@ -179,13 +179,9 @@ func DetectFile(cfg *config.Config) (string, error) {
 // ParsePorts parses a compose file and returns all unique host-side ports.
 // Extra ports from cfg.Compose.ExtraPorts are appended.
 func ParsePorts(composePath string, extra []int) ([]int, error) {
-	data, err := os.ReadFile(composePath)
+	f, err := parseFile(composePath)
 	if err != nil {
-		return nil, fmt.Errorf("compose: read %s: %w", composePath, err)
-	}
-	var f File
-	if err := yaml.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("compose: parse %s: %w", composePath, err)
+		return nil, err
 	}
 
 	seen := map[int]bool{}
@@ -207,6 +203,57 @@ func ParsePorts(composePath string, extra []int) ([]int, error) {
 	return ports, nil
 }
 
+// ParsePrimaryServiceTargetPorts parses the container-side ports published by
+// the configured primary service. These can differ from the host-side ports
+// that mutapod forwards locally (for example, "8001:8000").
+func ParsePrimaryServiceTargetPorts(composePath string, cfg *config.Config) ([]int, error) {
+	if cfg.Compose.PrimaryService == "" {
+		return nil, nil
+	}
+	f, err := parseFile(composePath)
+	if err != nil {
+		return nil, err
+	}
+
+	svc, ok := f.Services[cfg.Compose.PrimaryService]
+	if !ok {
+		return nil, fmt.Errorf("compose: primary service %q not found in %s", cfg.Compose.PrimaryService, composePath)
+	}
+
+	seen := map[int]bool{}
+	var ports []int
+	add := func(port int) {
+		if port <= 0 || seen[port] {
+			return
+		}
+		seen[port] = true
+		ports = append(ports, port)
+	}
+	for _, pe := range svc.Ports {
+		target := pe.Target
+		if target == 0 {
+			target = pe.Published
+		}
+		add(target)
+	}
+	for _, p := range cfg.Compose.ExtraPorts {
+		add(p)
+	}
+	return ports, nil
+}
+
+func parseFile(composePath string) (File, error) {
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return File{}, fmt.Errorf("compose: read %s: %w", composePath, err)
+	}
+	var f File
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return File{}, fmt.Errorf("compose: parse %s: %w", composePath, err)
+	}
+	return f, nil
+}
+
 // LocalComposeArgs returns docker compose CLI arguments for the selected file.
 func LocalComposeArgs(cfg *config.Config) ([]string, error) {
 	args := []string{"compose"}
@@ -224,6 +271,30 @@ func LocalComposeArgs(cfg *config.Config) ([]string, error) {
 		args = append(args, "-f", rel)
 	}
 	return args, nil
+}
+
+// PrimaryServiceContainerID returns the running container ID for the configured
+// primary service using the local Docker CLI and the selected Docker context.
+func PrimaryServiceContainerID(ctx context.Context, cfg *config.Config, dockerContext string, cmd shell.Commander) (string, error) {
+	if cfg.Compose.PrimaryService == "" {
+		return "", fmt.Errorf("compose: primary_service is required")
+	}
+	composeArgs, err := LocalComposeArgs(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	psArgs := append([]string{"--context", dockerContext}, composeArgs...)
+	psArgs = append(psArgs, "ps", "-q", cfg.Compose.PrimaryService)
+	containerID, err := cmd.Output(ctx, shell.RunOptions{Dir: cfg.Dir}, "docker", psArgs...)
+	if err != nil {
+		return "", err
+	}
+	trimmed := strings.TrimSpace(string(containerID))
+	if trimmed == "" {
+		return "", fmt.Errorf("compose: no running container found for service %q", cfg.Compose.PrimaryService)
+	}
+	return trimmed, nil
 }
 
 func remoteComposeArgs(cfg *config.Config, includeOverride bool) (string, error) {

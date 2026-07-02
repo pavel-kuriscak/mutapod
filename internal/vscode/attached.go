@@ -40,6 +40,10 @@ func ConfigureAttachedContainer(ctx context.Context, cfg *config.Config, dockerC
 	if err != nil {
 		return "", fmt.Errorf("vscode: resolve attached container image: %w", err)
 	}
+	containerName, err := primaryServiceContainerName(ctx, cfg, dockerContext, cmd)
+	if err != nil {
+		return "", fmt.Errorf("vscode: resolve attached container name: %w", err)
+	}
 
 	workspaceFolder := cfg.Compose.WorkspaceFolder
 	if workspaceFolder == "" {
@@ -65,13 +69,11 @@ func ConfigureAttachedContainer(ctx context.Context, cfg *config.Config, dockerC
 		mergeAnyMap(settings, profile.AttachedContainerSettings())
 		mergeStringMap(remoteEnv, profile.AttachedContainerRemoteEnv())
 	}
+	settings["remote.autoForwardPorts"] = false
 
-	configDir, err := attachedContainerConfigDir()
+	storageDir, err := attachedContainerStorageDir()
 	if err != nil {
 		return "", err
-	}
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", fmt.Errorf("vscode: create attached config dir: %w", err)
 	}
 
 	data := attachedContainerConfig{
@@ -84,22 +86,37 @@ func ConfigureAttachedContainer(ctx context.Context, cfg *config.Config, dockerC
 	if err != nil {
 		return "", fmt.Errorf("vscode: marshal attached config: %w", err)
 	}
-	filenames := attachedConfigFilenames(imageName)
-	for _, name := range filenames {
-		path := filepath.Join(configDir, name)
-		if err := os.WriteFile(path, append(encoded, '\n'), 0644); err != nil {
-			return "", fmt.Errorf("vscode: write attached config: %w", err)
-		}
+	imageConfigDir := filepath.Join(storageDir, "imageConfigs")
+	if err := writeAttachedContainerConfig(imageConfigDir, attachedConfigFilenames(imageName), encoded); err != nil {
+		return "", err
 	}
-	return filepath.Join(configDir, filenames[0]), nil
+	nameConfigDir := filepath.Join(storageDir, "nameConfigs")
+	nameFilenames := attachedConfigFilenames(containerName)
+	if err := writeAttachedContainerConfig(nameConfigDir, nameFilenames, encoded); err != nil {
+		return "", err
+	}
+	return filepath.Join(nameConfigDir, nameFilenames[0]), nil
 }
 
-func attachedContainerConfigDir() (string, error) {
+func attachedContainerStorageDir() (string, error) {
 	root, err := userConfigDirLookup()
 	if err != nil {
 		return "", fmt.Errorf("vscode: resolve user config dir: %w", err)
 	}
-	return filepath.Join(root, "Code", "User", "globalStorage", attachedConfigStorageDir, "imageConfigs"), nil
+	return filepath.Join(root, "Code", "User", "globalStorage", attachedConfigStorageDir), nil
+}
+
+func writeAttachedContainerConfig(dir string, filenames []string, encoded []byte) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("vscode: create attached config dir: %w", err)
+	}
+	for _, name := range filenames {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, append(encoded, '\n'), 0644); err != nil {
+			return fmt.Errorf("vscode: write attached config: %w", err)
+		}
+	}
+	return nil
 }
 
 func primaryServiceImage(ctx context.Context, cfg *config.Config, dockerContext string, cmd shell.Commander) (string, error) {

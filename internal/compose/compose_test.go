@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/mutapod/mutapod/internal/config"
 	"github.com/mutapod/mutapod/internal/profiles"
+	"github.com/mutapod/mutapod/internal/shell"
 )
 
 func writeCompose(t *testing.T, dir, name, content string) string {
@@ -214,6 +216,34 @@ services:
 	}
 }
 
+func TestParsePrimaryServiceTargetPorts(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCompose(t, dir, "compose.yaml", `
+services:
+  web:
+    ports:
+      - "8001:8000"
+      - published: 9001
+        target: 9000
+  worker:
+    ports:
+      - "7001:7000"
+`)
+	c := cfg(dir)
+	c.Compose.PrimaryService = "web"
+	c.Compose.ExtraPorts = []int{8100}
+
+	ports, err := ParsePrimaryServiceTargetPorts(path, c)
+	if err != nil {
+		t.Fatalf("ParsePrimaryServiceTargetPorts: %v", err)
+	}
+	sort.Ints(ports)
+	want := []int{8000, 8100, 9000}
+	if !reflect.DeepEqual(ports, want) {
+		t.Fatalf("target ports: got %v, want %v", ports, want)
+	}
+}
+
 func TestRemoteComposeArgs_DefaultFileAtRoot(t *testing.T) {
 	dir := t.TempDir()
 	writeCompose(t, dir, "compose.yaml", "services: {}")
@@ -311,6 +341,25 @@ func TestLocalComposeArgs_CustomRelativeFile(t *testing.T) {
 	want := []string{"compose", "-f", "compose-dev.yaml"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("LocalComposeArgs: got %v, want %v", args, want)
+	}
+}
+
+func TestPrimaryServiceContainerID_UsesDockerContextAndPrimaryService(t *testing.T) {
+	dir := t.TempDir()
+	writeCompose(t, dir, "compose-dev.yaml", "services: {web: {image: app}}")
+	c := cfg(dir)
+	c.Compose.File = "compose-dev.yaml"
+	c.Compose.PrimaryService = "web"
+
+	fake := shell.NewFakeCommander()
+	fake.Stub("abc123\n", "docker", "--context", "mutapod-test", "compose", "-f", "compose-dev.yaml", "ps", "-q", "web")
+
+	got, err := PrimaryServiceContainerID(context.Background(), c, "mutapod-test", fake)
+	if err != nil {
+		t.Fatalf("PrimaryServiceContainerID: unexpected error: %v", err)
+	}
+	if got != "abc123" {
+		t.Fatalf("PrimaryServiceContainerID: got %q, want abc123", got)
 	}
 }
 

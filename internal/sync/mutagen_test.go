@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,6 +34,41 @@ func TestEnsureForward_RecreatesWithForwardTerminate(t *testing.T) {
 	}
 }
 
+func TestEnsureForwardToContainer_CreatesDockerEndpoint(t *testing.T) {
+	manager, fake := testManager()
+	manager.ForwardToContainer("ssh://alice@example-host", "myapp-web-1")
+
+	if err := manager.EnsureForward(context.Background(), 5000); err != nil {
+		t.Fatalf("EnsureForward: %v", err)
+	}
+
+	if !fake.CalledWith("mutagen", "forward", "terminate", "mutapod-myapp-5000") {
+		t.Fatal("expected legacy VM forward session to be terminated")
+	}
+	if !fake.CalledWith("mutagen",
+		"forward", "create",
+		"--name", "mutapod-myapp-container-5000",
+		"--label", "mutapod-name=myapp",
+		"tcp:localhost:5000",
+		"docker://myapp-web-1:tcp:localhost:5000",
+	) {
+		t.Fatalf("expected container forward create, got %#v", fake.Calls)
+	}
+	createCall, ok := findCall(fake.Calls, "mutagen",
+		"forward", "create",
+		"--name", "mutapod-myapp-container-5000",
+		"--label", "mutapod-name=myapp",
+		"tcp:localhost:5000",
+		"docker://myapp-web-1:tcp:localhost:5000",
+	)
+	if !ok {
+		t.Fatal("expected container forward create call")
+	}
+	if len(createCall.Opts.Env) != 1 || createCall.Opts.Env[0] != "DOCKER_HOST=ssh://alice@example-host" {
+		t.Fatalf("DOCKER_HOST env: got %#v", createCall.Opts.Env)
+	}
+}
+
 func TestEnsureReverseForward_CreatesRemoteListener(t *testing.T) {
 	manager, fake := testManager()
 
@@ -49,6 +85,15 @@ func TestEnsureReverseForward_CreatesRemoteListener(t *testing.T) {
 	) {
 		t.Fatalf("expected reverse forward create, got %#v", fake.Calls)
 	}
+}
+
+func findCall(calls []shell.Call, name string, args ...string) (shell.Call, bool) {
+	for _, call := range calls {
+		if call.Name == name && reflect.DeepEqual(call.Args, args) {
+			return call, true
+		}
+	}
+	return shell.Call{}, false
 }
 
 func TestTerminateAllSessions_UsesMatchingTerminateCommands(t *testing.T) {

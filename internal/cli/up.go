@@ -19,9 +19,11 @@ import (
 	"github.com/mutapod/mutapod/internal/deps"
 	"github.com/mutapod/mutapod/internal/dockerctx"
 	"github.com/mutapod/mutapod/internal/ignore"
+	"github.com/mutapod/mutapod/internal/portrelay"
 	"github.com/mutapod/mutapod/internal/profiles"
 	"github.com/mutapod/mutapod/internal/provider"
 	"github.com/mutapod/mutapod/internal/shell"
+	"github.com/mutapod/mutapod/internal/sshforward"
 	"github.com/mutapod/mutapod/internal/state"
 	mutagensync "github.com/mutapod/mutapod/internal/sync"
 	"github.com/mutapod/mutapod/internal/vscode"
@@ -424,6 +426,13 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 		ok("Personal AI tools ready: %s", strings.Join(profileNames(activeProfiles), ", "))
 	}
 
+	step("Configuring local Docker context...")
+	dockerContext, err := dockerctx.EnsureContext(ctx, cfg, sshCfg, shell.DefaultCommander)
+	if err != nil {
+		return err
+	}
+	ok("Docker context configured: %s", dockerContext)
+
 	var ports []int
 	composePath, err := compose.DetectFile(cfg)
 	if err != nil {
@@ -434,13 +443,54 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 			return fmt.Errorf("port config: %w", err)
 		}
 		if len(ports) > 0 {
-			step("Forwarding ports: %v...", ports)
-			for _, p := range ports {
-				if err := syncMgr.EnsureForward(ctx, p); err != nil {
-					fmt.Fprintf(os.Stderr, "  warning: port %d forward failed: %v\n", p, err)
+			sshForwardMgr := sshforward.New(cfg, sshCfg)
+			switch cfg.Compose.ForwardBackend {
+			case "ssh":
+				if cfg.Compose.PrimaryService != "" {
+					relayPorts, err := compose.ParsePrimaryServiceTargetPorts(composePath, cfg)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: primary-service port relay setup skipped: %v\n", err)
+					} else if len(relayPorts) > 0 {
+						step("Preparing primary-service loopback relays: %v...", relayPorts)
+						if err := portrelay.Ensure(ctx, prov, cfg, activeProfiles, relayPorts); err != nil {
+							fmt.Fprintf(os.Stderr, "  warning: primary-service port relay setup failed: %v\n", err)
+						} else {
+							ok("Primary-service loopback relays ready: %v", relayPorts)
+						}
+					}
+				}
+				step("Forwarding ports with SSH compression: %v...", ports)
+				for _, p := range ports {
+					syncMgr.TerminateForwardVariants(ctx, p)
+					if err := sshForwardMgr.Ensure(p); err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: SSH port %d forward failed: %v\n", p, err)
+					}
+				}
+				ok("SSH ports forwarded: %v", ports)
+			default:
+				if cfg.Compose.ForwardToPrimaryService {
+					containerID, err := compose.PrimaryServiceContainerID(ctx, cfg, dockerContext, shell.DefaultCommander)
+					if err != nil {
+						return fmt.Errorf("forward target: %w", err)
+					}
+					dockerHost := fmt.Sprintf("ssh://%s@%s", sshCfg.User, sshCfg.Host)
+					syncMgr.ForwardToContainer(dockerHost, containerID)
+					step("Forwarding ports to primary service %s: %v...", cfg.Compose.PrimaryService, ports)
+				} else {
+					step("Forwarding ports: %v...", ports)
+				}
+				for _, p := range ports {
+					_ = sshForwardMgr.Stop(p)
+					if err := syncMgr.EnsureForward(ctx, p); err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: port %d forward failed: %v\n", p, err)
+					}
+				}
+				if cfg.Compose.ForwardToPrimaryService {
+					ok("Ports forwarded to primary service: %v", ports)
+				} else {
+					ok("Ports forwarded: %v", ports)
 				}
 			}
-			ok("Ports forwarded: %v", ports)
 		}
 	}
 
@@ -465,20 +515,14 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 		RemotePath:             cfg.WorkspacePath(),
 		SessionConfig:          sessionConfigSignature,
 		IgnoreSignature:        ignoreSignature,
-		ForwardSessions:        buildForwardSessionMap(syncMgr, ports),
+		ForwardBackend:         cfg.Compose.ForwardBackend,
+		ForwardSessions:        buildForwardSessionMap(cfg, syncMgr, ports),
 		ReverseForwardSessions: buildReverseForwardSessionMap(syncMgr, cfg.Compose.ReverseForwards),
 	}
 	st.Profiles = profileStates
 	if err := state.Save(st); err != nil {
 		shell.Debugf("warning: save state: %v", err)
 	}
-
-	step("Configuring local Docker context...")
-	dockerContext, err := dockerctx.EnsureContext(ctx, cfg, sshCfg, shell.DefaultCommander)
-	if err != nil {
-		return err
-	}
-	ok("Docker context configured: %s", dockerContext)
 
 	step("Configuring local VS Code workspace...")
 	workspaceFile, err := vscode.ConfigureWorkspace(cfg, sshCfg, dockerContext)
@@ -493,6 +537,15 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 	}
 	if attachedConfigPath != "" {
 		ok("Attached-container defaults configured: %s", attachedConfigPath)
+		if shouldPrepareAttachedContainerExtensionInstall(cfg) {
+			step("Preparing attached-container extension install...")
+			if err := prepareAttachedContainerExtensionInstall(ctx, prov, cfg, activeProfiles); err != nil {
+				shell.Debugf("attached-container extension install prep: %v", err)
+				fmt.Fprintf(os.Stderr, "  warning: could not prepare attached-container extension install: %v\n", err)
+			} else {
+				ok("Attached-container extension install ready")
+			}
+		}
 	}
 
 	if err := maybeStartIdleHeartbeat(cfg); err != nil {
@@ -573,7 +626,12 @@ func runDown(_ *cobra.Command, _ []string) error {
 	forwardPorts, reversePorts, _ := portsForSessionCleanup(cfg, st)
 	if len(forwardPorts) > 0 {
 		step("Pausing port forwards...")
-		syncMgr.PauseAllForwards(ctx, forwardPorts)
+		sshForwardMgr := sshforward.New(cfg, sshCfg)
+		if activeForwardBackend(cfg, st) == "ssh" {
+			sshForwardMgr.StopAll(forwardPorts)
+		} else {
+			syncMgr.PauseAllForwards(ctx, forwardPorts)
+		}
 	}
 	if len(reversePorts) > 0 {
 		step("Pausing reverse forwards...")
@@ -718,14 +776,18 @@ func portsForSessionCleanup(cfg *config.Config, st *state.State) ([]int, []int, 
 	return forwardPorts, reversePorts, nil
 }
 
-func buildForwardSessionMap(syncMgr *mutagensync.Manager, ports []int) map[string]string {
+func buildForwardSessionMap(cfg *config.Config, syncMgr *mutagensync.Manager, ports []int) map[string]string {
 	if len(ports) == 0 {
 		return nil
 	}
 
 	forwardSessions := make(map[string]string, len(ports))
 	for _, port := range ports {
-		forwardSessions[fmt.Sprintf("%d", port)] = syncMgr.ForwardSessionName(port)
+		if cfg.Compose.ForwardBackend == "ssh" {
+			forwardSessions[fmt.Sprintf("%d", port)] = fmt.Sprintf("mutapod-%s-ssh-%d", cfg.Name, port)
+		} else {
+			forwardSessions[fmt.Sprintf("%d", port)] = syncMgr.ForwardSessionName(port)
+		}
 	}
 	return forwardSessions
 }
@@ -740,6 +802,21 @@ func buildReverseForwardSessionMap(syncMgr *mutagensync.Manager, ports []int) ma
 		forwardSessions[fmt.Sprintf("%d", port)] = syncMgr.ReverseForwardSessionName(port)
 	}
 	return forwardSessions
+}
+
+func activeForwardBackend(cfg *config.Config, st *state.State) string {
+	if st.Sync.ForwardBackend != "" {
+		return st.Sync.ForwardBackend
+	}
+	for _, session := range st.Sync.ForwardSessions {
+		if strings.Contains(session, "-ssh-") {
+			return "ssh"
+		}
+	}
+	if len(st.Sync.ForwardSessions) > 0 {
+		return "mutagen"
+	}
+	return cfg.Compose.ForwardBackend
 }
 
 func ensureRemoteWorkspace(ctx context.Context, prov provider.Provider, workspacePath, user string) error {
@@ -803,6 +880,49 @@ func shouldRefreshProfileSession(prior state.ProfileSyncState, found bool, signa
 		return true
 	}
 	return prior.SessionConfig == "" || prior.SessionConfig != signature
+}
+
+func shouldPrepareAttachedContainerExtensionInstall(cfg *config.Config) bool {
+	return cfg.Compose.CopyLocalExtensionsEnabled() || len(cfg.Compose.Extensions) > 0
+}
+
+func prepareAttachedContainerExtensionInstall(ctx context.Context, prov provider.Provider, cfg *config.Config, activeProfiles []profiles.Spec) error {
+	if cfg.Compose.PrimaryService == "" {
+		return nil
+	}
+	return compose.ExecInPrimaryService(ctx, prov, cfg, activeProfiles, attachedContainerExtensionInstallPrepScript())
+}
+
+func attachedContainerExtensionInstallPrepScript() string {
+	return `set -eu
+needs_restart=0
+for home in /root /home/*; do
+  [ -d "$home/.vscode-server/data/Machine" ] || continue
+  marker="$home/.vscode-server/data/Machine/.installExtensionsMarker"
+  extensions_dir="$home/.vscode-server/extensions"
+  if [ ! -f "$marker" ]; then
+    continue
+  fi
+  has_extensions=0
+  if [ -d "$extensions_dir" ] && find "$extensions_dir" -mindepth 1 -maxdepth 1 -type d | read _; then
+    has_extensions=1
+  fi
+  if [ "$has_extensions" -eq 0 ]; then
+    rm -f "$marker"
+    needs_restart=1
+  fi
+done
+if [ "$needs_restart" -eq 1 ]; then
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f '[/]\.vscode-server/bin/' 2>/dev/null || true
+  else
+    ps -eo pid=,args= 2>/dev/null | while read -r pid args; do
+      case "$args" in
+        *"/.vscode-server/bin/"*) kill "$pid" 2>/dev/null || true ;;
+      esac
+    done
+  fi
+fi`
 }
 
 func cleanupRemoteCodexRuntimeSQLite(ctx context.Context, prov provider.Provider, remotePath string) error {

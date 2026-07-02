@@ -48,6 +48,7 @@ type SyncState struct {
 	SessionConfig   string    `json:"session_config,omitempty"`
 	IgnoreSignature string    `json:"ignore_signature,omitempty"`
 	LastSyncAt      time.Time `json:"last_sync_at,omitempty"`
+	ForwardBackend  string    `json:"forward_backend,omitempty"` // "mutagen" | "ssh"
 	// ForwardSessions holds mutagen forward session names keyed by port number.
 	ForwardSessions map[string]string `json:"forward_sessions,omitempty"`
 	// ReverseForwardSessions holds reverse Mutagen forward session names keyed by port number.

@@ -20,11 +20,13 @@ import (
 
 // Manager handles Mutagen sync and forward sessions for a workspace.
 type Manager struct {
-	cfg         *config.Config
-	sshCfg      *provider.SSHConfig
-	mutagenPath string
-	cmd         shell.Commander
-	sessionName string
+	cfg               *config.Config
+	sshCfg            *provider.SSHConfig
+	mutagenPath       string
+	cmd               shell.Commander
+	sessionName       string
+	forwardDockerHost string
+	forwardContainer  string
 }
 
 // New creates a sync Manager.
@@ -48,7 +50,25 @@ func (m *Manager) SyncStatus(ctx context.Context) (string, error) {
 
 // ForwardSessionName returns the mutagen forward session name for a port.
 func (m *Manager) ForwardSessionName(port int) string {
+	if m.forwardContainer != "" {
+		return m.containerForwardSessionName(port)
+	}
+	return m.vmForwardSessionName(port)
+}
+
+func (m *Manager) vmForwardSessionName(port int) string {
 	return fmt.Sprintf("mutapod-%s-%d", m.cfg.Name, port)
+}
+
+func (m *Manager) containerForwardSessionName(port int) string {
+	return fmt.Sprintf("mutapod-%s-container-%d", m.cfg.Name, port)
+}
+
+// ForwardToContainer configures future forward sessions to target a container's
+// loopback namespace through Docker instead of targeting the remote VM.
+func (m *Manager) ForwardToContainer(dockerHost, container string) {
+	m.forwardDockerHost = dockerHost
+	m.forwardContainer = container
 }
 
 // ReverseForwardSessionName returns the mutagen reverse forward session name for a port.
@@ -268,6 +288,11 @@ func (m *Manager) TerminateSync(ctx context.Context) error {
 func (m *Manager) EnsureForward(ctx context.Context, port int) error {
 	name := m.ForwardSessionName(port)
 	shell.Debugf("forward: checking session %s", name)
+	if m.forwardContainer != "" {
+		_ = m.terminateForwardSession(ctx, m.vmForwardSessionName(port))
+	} else {
+		_ = m.terminateForwardSession(ctx, m.containerForwardSessionName(port))
+	}
 
 	status, err := m.forwardStatus(ctx, name)
 	if err != nil {
@@ -294,13 +319,19 @@ func (m *Manager) createForward(ctx context.Context, port int, name string) erro
 	local := fmt.Sprintf("tcp:localhost:%d", port)
 	remote := fmt.Sprintf("tcp:localhost:%d", port)
 	endpoint := fmt.Sprintf("%s@%s", m.sshCfg.User, m.sshCfg.Host)
+	destination := endpoint + ":" + remote
+	opts := shell.RunOptions{}
+	if m.forwardContainer != "" {
+		destination = fmt.Sprintf("docker://%s:tcp:localhost:%d", m.forwardContainer, port)
+		opts.Env = []string{"DOCKER_HOST=" + m.forwardDockerHost}
+	}
 
-	return m.cmd.Run(ctx, shell.RunOptions{}, m.mutagenPath,
+	return m.cmd.Run(ctx, opts, m.mutagenPath,
 		"forward", "create",
 		"--name", name,
 		"--label", "mutapod-name="+m.cfg.Name,
 		local,
-		endpoint+":"+remote,
+		destination,
 	)
 }
 
@@ -358,6 +389,13 @@ func (m *Manager) PauseAllForwards(ctx context.Context, ports []int) {
 	}
 }
 
+// TerminateForwardVariants terminates all forward session variants that
+// mutapod may have created for a port.
+func (m *Manager) TerminateForwardVariants(ctx context.Context, port int) {
+	_ = m.terminateForwardSession(ctx, m.vmForwardSessionName(port))
+	_ = m.terminateForwardSession(ctx, m.containerForwardSessionName(port))
+}
+
 // PauseReverseForward pauses a reverse forward session.
 func (m *Manager) PauseReverseForward(ctx context.Context, port int) error {
 	return m.cmd.Run(ctx, shell.RunOptions{}, m.mutagenPath,
@@ -376,7 +414,8 @@ func (m *Manager) PauseAllReverseForwards(ctx context.Context, ports []int) {
 func (m *Manager) TerminateAllSessions(ctx context.Context, forwardPorts, reversePorts []int) {
 	_ = m.terminateSyncSession(ctx, m.sessionName)
 	for _, p := range forwardPorts {
-		_ = m.terminateForwardSession(ctx, m.ForwardSessionName(p))
+		_ = m.terminateForwardSession(ctx, m.vmForwardSessionName(p))
+		_ = m.terminateForwardSession(ctx, m.containerForwardSessionName(p))
 	}
 	for _, p := range reversePorts {
 		_ = m.terminateForwardSession(ctx, m.ReverseForwardSessionName(p))

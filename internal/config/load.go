@@ -94,6 +94,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Sync.Mode == "" {
 		cfg.Sync.Mode = "two-way-resolved"
 	}
+	if cfg.Compose.ForwardBackend == "" {
+		cfg.Compose.ForwardBackend = "ssh"
+	}
 	if cfg.Idle.TimeoutMinutes == 0 {
 		cfg.Idle.TimeoutMinutes = 30
 	}
@@ -185,6 +188,14 @@ func validate(cfg *Config) error {
 	}
 	if err := validatePorts("compose.reverse_forwards", cfg.Compose.ReverseForwards); err != nil {
 		return err
+	}
+	switch cfg.Compose.ForwardBackend {
+	case "mutagen", "ssh":
+	default:
+		return fmt.Errorf("config: unsupported compose.forward_backend %q (supported: mutagen, ssh)", cfg.Compose.ForwardBackend)
+	}
+	if cfg.Compose.ForwardToPrimaryService && cfg.Compose.PrimaryService == "" {
+		return fmt.Errorf("config: compose.forward_to_primary_service requires compose.primary_service")
 	}
 	return nil
 }

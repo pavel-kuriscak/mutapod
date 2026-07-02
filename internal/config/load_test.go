@@ -137,6 +137,12 @@ provider:
 	if cfg.Sync.Mode != "two-way-resolved" {
 		t.Errorf("default sync mode: got %q", cfg.Sync.Mode)
 	}
+	if cfg.Compose.ForwardBackend != "ssh" {
+		t.Errorf("default compose.forward_backend: got %q, want ssh", cfg.Compose.ForwardBackend)
+	}
+	if cfg.Compose.ForwardToPrimaryService {
+		t.Errorf("default compose.forward_to_primary_service: got true, want false")
+	}
 }
 
 func TestLoad_AzureDefaults(t *testing.T) {
@@ -369,6 +375,16 @@ func TestLoad_Validation(t *testing.T) {
 			wantErr: "compose.reverse_forwards contains invalid port 0",
 		},
 		{
+			name:    "forward to primary service requires primary service",
+			yaml:    "name: x\nprovider:\n  type: gcp\n  gcp:\n    project: p\ncompose:\n  forward_to_primary_service: true\n",
+			wantErr: "compose.forward_to_primary_service requires compose.primary_service",
+		},
+		{
+			name:    "unsupported forward backend",
+			yaml:    "name: x\nprovider:\n  type: gcp\n  gcp:\n    project: p\ncompose:\n  forward_backend: magic\n",
+			wantErr: "unsupported compose.forward_backend",
+		},
+		{
 			name:    "reserved GCP fingerprint label",
 			yaml:    "name: x\nprovider:\n  type: gcp\n  gcp:\n    project: p\n    labels:\n      mutapod-config: custom\n",
 			wantErr: "is reserved by mutapod",
@@ -392,6 +408,31 @@ func TestLoad_Validation(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoad_ForwardToPrimaryServiceAllowedWithDefaultSSHBackend(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+name: test
+provider:
+  type: gcp
+  gcp:
+    project: proj
+compose:
+  primary_service: web
+  forward_to_primary_service: true
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Compose.ForwardBackend != "ssh" {
+		t.Fatalf("forward_backend: got %q, want ssh", cfg.Compose.ForwardBackend)
+	}
+	if !cfg.Compose.ForwardToPrimaryService {
+		t.Fatal("forward_to_primary_service: got false, want true")
 	}
 }
 

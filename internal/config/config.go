@@ -70,13 +70,15 @@ type SyncConfig struct {
 type ComposeConfig struct {
 	// File is the path to the compose file relative to the project root.
 	// If empty, mutapod auto-detects compose.yaml / docker-compose.yaml.
-	File                string   `yaml:"file"`
-	PrimaryService      string   `yaml:"primary_service"`
-	WorkspaceFolder     string   `yaml:"workspace_folder"`
-	Extensions          []string `yaml:"extensions"`
-	CopyLocalExtensions *bool    `yaml:"copy_local_extensions"`
-	ExtraPorts          []int    `yaml:"extra_ports"`
-	ReverseForwards     []int    `yaml:"reverse_forwards"`
+	File                    string   `yaml:"file"`
+	PrimaryService          string   `yaml:"primary_service"`
+	WorkspaceFolder         string   `yaml:"workspace_folder"`
+	Extensions              []string `yaml:"extensions"`
+	CopyLocalExtensions     *bool    `yaml:"copy_local_extensions"`
+	ForwardBackend          string   `yaml:"forward_backend"`
+	ForwardToPrimaryService bool     `yaml:"forward_to_primary_service"`
+	ExtraPorts              []int    `yaml:"extra_ports"`
+	ReverseForwards         []int    `yaml:"reverse_forwards"`
 }
 
 type ProfilesConfig struct {

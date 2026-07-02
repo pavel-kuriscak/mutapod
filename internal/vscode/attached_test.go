@@ -38,6 +38,7 @@ services:
 	fake := shell.NewFakeCommander()
 	fake.Stub("43ee2d7e7408\n", "docker", "--context", "mutapod-testproject", "compose", "-f", "compose.yaml", "ps", "-q", "web")
 	fake.Stub("testproject-web\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Config.Image}}", "43ee2d7e7408")
+	fake.Stub("/testproject-web-1\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Name}}", "43ee2d7e7408")
 
 	oldLookup := userConfigDirLookup
 	userConfigDirLookup = func() (string, error) { return t.TempDir(), nil }
@@ -75,8 +76,15 @@ services:
 	if !reflect.DeepEqual(got.Extensions, wantExtensions) {
 		t.Fatalf("extensions: got %v, want %v", got.Extensions, wantExtensions)
 	}
-	if filepath.Base(path) != "testproject-web.json" {
+	if got.Settings["remote.autoForwardPorts"] != false {
+		t.Fatalf("remote.autoForwardPorts: got %#v", got.Settings["remote.autoForwardPorts"])
+	}
+	if filepath.Base(path) != "testproject-web-1.json" {
 		t.Fatalf("path: got %q", path)
+	}
+	imageConfigPath := filepath.Join(filepath.Dir(filepath.Dir(path)), "imageConfigs", "testproject-web.json")
+	if _, err := os.Stat(imageConfigPath); err != nil {
+		t.Fatalf("image config was not written: %v", err)
 	}
 }
 
@@ -125,6 +133,7 @@ services:
 	fake := shell.NewFakeCommander()
 	fake.Stub("43ee2d7e7408\n", "docker", "--context", "mutapod-testproject", "compose", "-f", "compose.yaml", "ps", "-q", "web")
 	fake.Stub("testproject-web\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Config.Image}}", "43ee2d7e7408")
+	fake.Stub("/testproject-web-1\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Name}}", "43ee2d7e7408")
 
 	oldLookup := userConfigDirLookup
 	userConfigDirLookup = func() (string, error) { return t.TempDir(), nil }
@@ -157,6 +166,9 @@ services:
 	}
 	if got.Settings["extensions.supportNodeGlobalNavigator"] != true {
 		t.Fatalf("extensions.supportNodeGlobalNavigator: got %#v", got.Settings["extensions.supportNodeGlobalNavigator"])
+	}
+	if got.Settings["remote.autoForwardPorts"] != false {
+		t.Fatalf("remote.autoForwardPorts: got %#v", got.Settings["remote.autoForwardPorts"])
 	}
 	if got.Settings["claudeCode.claudeProcessWrapper"] != "/usr/local/bin/claude" {
 		t.Fatalf("claudeCode.claudeProcessWrapper: got %#v", got.Settings["claudeCode.claudeProcessWrapper"])
@@ -204,6 +216,7 @@ func TestConfigureAttachedContainer_UsesExplicitWorkspaceFolderAndCanSkipLocalEx
 	fake := shell.NewFakeCommander()
 	fake.Stub("43ee2d7e7408\n", "docker", "--context", "mutapod-testproject", "compose", "-f", "compose.yaml", "ps", "-q", "web")
 	fake.Stub("testproject-web\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Config.Image}}", "43ee2d7e7408")
+	fake.Stub("/testproject-web-1\n", "docker", "--context", "mutapod-testproject", "inspect", "--format", "{{.Name}}", "43ee2d7e7408")
 
 	oldLookup := userConfigDirLookup
 	userConfigDirLookup = func() (string, error) { return t.TempDir(), nil }

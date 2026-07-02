@@ -265,12 +265,18 @@ For the common case, you can omit `sync` entirely. The defaults already mean:
 | `workspace_folder` | no | inferred when possible | In-container project path for the generated "Attach to Running Container" profile. If omitted, mutapod first tries to infer it from the primary service bind mount or `working_dir` |
 | `extensions` | no | empty | Extra VS Code extension IDs to add to the generated attached-container profile |
 | `copy_local_extensions` | no | `true` | Copies your current local `code --list-extensions` set into the generated attached-container profile |
+| `forward_backend` | no | `ssh` | Port forwarding backend. Use `mutagen` for Mutagen-managed forwards |
+| `forward_to_primary_service` | no | `false` | Legacy Mutagen-only mode for forwarding discovered ports into `primary_service` container loopback |
 | `extra_ports` | no | empty | Additional ports to forward besides those discovered from the Compose file |
 | `reverse_forwards` | no | empty | Local machine ports to expose on the remote VM and into the primary container via `host.docker.internal:<port>` |
 
 `docker compose` is executed remotely from the synced workspace directory.
 
 When `compose.primary_service` and `compose.workspace_folder` are set, mutapod automatically injects a compose override on the remote VM to bind-mount the synced workspace into that service if the base compose file doesn't already do it. This is what enables the intended "edit locally, sync to VM, see changes live in the remote container" workflow even for repos whose compose file wasn't written specifically for mutapod.
+
+When `compose.forward_backend` is `ssh`, mutapod starts compressed OpenSSH tunnels for the discovered ports. This is the default because it is faster for large assets than Mutagen forwarding. When `compose.primary_service` is set, mutapod also prepares loopback relays inside that container for its published target ports, so local-style servers such as plain `python manage.py runserver` can keep listening on `127.0.0.1:<port>` inside the container. If a process already listens on the container interface, the relay for that port exits quietly because it is not needed.
+
+When `compose.forward_backend` is `mutagen` and `compose.forward_to_primary_service` is `true`, mutapod creates Mutagen forward sessions that target the primary container directly through Docker. This older mode is still available, but it is no longer needed for plain `runserver` under the default SSH forwarding backend.
 
 When `compose.reverse_forwards` is set, mutapod creates reverse Mutagen forwards from the remote VM back to your local machine and injects `host.docker.internal:host-gateway` into the primary service automatically. This lets code inside the main container reach local services on your machine using the same port numbers through `host.docker.internal:<port>`.
 
@@ -303,6 +309,7 @@ When `primary_service` is set, `mutapod up` also pre-generates the VS Code attac
 - otherwise tries to infer the folder from the service bind mount or `working_dir`
 - copies your currently installed local VS Code extensions
 - merges in any extra IDs from `compose.extensions`
+- disables VS Code remote auto-forwarding so mutapod remains the source of forwarded ports
 
 ### `profiles`
 
