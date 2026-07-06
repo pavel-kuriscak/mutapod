@@ -22,5 +22,10 @@ for lease in "$lease_dir"/*.lease; do
 done
 
 if (( has_live == 0 )); then
+    boot_grace_seconds=600
+    uptime_seconds="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)"
+    if [[ "$uptime_seconds" =~ ^[0-9]+$ ]] && (( uptime_seconds < boot_grace_seconds )); then
+        exit 0
+    fi
     shutdown -h now
 fi

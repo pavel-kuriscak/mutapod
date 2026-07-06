@@ -40,6 +40,21 @@ func TestLeaseExpiry_Defaults(t *testing.T) {
 	}
 }
 
+func TestIdleCheckScriptAllowsBootGraceBeforeShutdown(t *testing.T) {
+	script := string(idleCheckScript)
+	grace := strings.Index(script, "boot_grace_seconds=600")
+	shutdown := strings.Index(script, "shutdown -h now")
+	if grace < 0 {
+		t.Fatalf("idle check script missing boot grace:\n%s", script)
+	}
+	if shutdown < 0 {
+		t.Fatalf("idle check script missing shutdown command:\n%s", script)
+	}
+	if grace > shutdown {
+		t.Fatalf("idle check boot grace must be evaluated before shutdown:\n%s", script)
+	}
+}
+
 func TestIsSSHStartupError(t *testing.T) {
 	tests := []struct {
 		err  error
