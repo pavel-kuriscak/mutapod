@@ -17,7 +17,7 @@ var resetYes bool
 
 func resetCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "reset [local|container]",
+		Use:   "reset [local|container|headless]",
 		Short: "Recreate the VM and local mutapod sessions from scratch",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runReset,

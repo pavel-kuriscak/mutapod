@@ -40,6 +40,21 @@ func TestLeaseExpiry_Defaults(t *testing.T) {
 	}
 }
 
+func TestLeaseExpiryWithMinimum(t *testing.T) {
+	now := time.Unix(0, 0)
+	cfg := &config.Config{}
+	got := LeaseExpiryWithMinimum(cfg, now, time.Hour)
+	if got.Sub(now) != time.Hour {
+		t.Fatalf("LeaseExpiryWithMinimum: got %v", got.Sub(now))
+	}
+
+	cfg.Idle.TimeoutMinutes = 90
+	got = LeaseExpiryWithMinimum(cfg, now, time.Hour)
+	if got.Sub(now) != 90*time.Minute {
+		t.Fatalf("LeaseExpiryWithMinimum should keep longer config timeout, got %v", got.Sub(now))
+	}
+}
+
 func TestIdleCheckScriptAllowsBootGraceBeforeShutdown(t *testing.T) {
 	script := string(idleCheckScript)
 	grace := strings.Index(script, "boot_grace_seconds=600")

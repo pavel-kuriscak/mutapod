@@ -79,7 +79,7 @@ internal/
     reset.go                terminate+delete+wipe state, then run `up`
     leases.go               `mutapod leases` — list VM-side lease records
     idle.go                 `mutapod idle-heartbeat` — runs in background
-                            during VS Code usage to refresh the lease
+                            during VS Code/headless usage to refresh the lease
     version.go              `version` and `update` commands
     autoupdate.go           prompt-on-launch update check (skipped for
                             certain subcommands and non-TTY runs)
@@ -130,12 +130,14 @@ internal/
                             install scripts; handles the special
                             ~/.claude.json hard-link bridge
 
-  agents/                   writes/updates AGENTS.md in the project root
-                            (managed block delimited by HTML comments)
+  agents/                   inspects/writes/updates the top AGENTS.md
+                            mutapod block (managed by Go, delimited by
+                            HTML comments)
 
   vscode/                   generates mutapod.code-workspace, the attached-
                             container imageConfig (Dev Containers), and
-                            launches VS Code in attached or local mode
+                            launches VS Code in attached/local mode or
+                            skips launch in headless mode
 
   dockerctx/                creates/updates a project-scoped Docker context
                             named like the GCP instance, pointing at
@@ -178,13 +180,15 @@ specialised package.
 
 ```
 1.  parseUpLaunchMode(args)                  — "" or "container" → attached;
-                                               "local" → open code-workspace
+                                               "local" → open code-workspace;
+                                               "headless" → skip VS Code
 2.  loadConfig()                             — find mutapod.yaml walking up;
                                                provider.type is the default
                                                provider unless --provider
                                                overrides it
 3.  confirmMissingIgnoreFile(...)            — warn if no .mutapodignore
-4.  agents.Ensure(cfg)                       — write/update AGENTS.md block
+4.  ensureAgentsForStartup(...)              — inspect/prompt for AGENTS.md
+                                               block, then keep it at top
 5.  deps.MutagenPath()                       — download mutagen if needed
 6.  state.Load(cfg.Name)                     — read ~/.mutapod/state/<n>.json
 7.  provider.New(cfg, ...)                   — registry lookup → cloud Provider
@@ -251,9 +255,10 @@ specialised package.
                                                globalStorage
 31. maybeConfigureIdle(...)                  — install systemd timer,
                                                write lease, start local
-                                               heartbeat process
+                                               heartbeat process; headless
+                                               uses at least a one-hour lease
 32. vscode.PrintInstructions + Launch(...)   — open VS Code (attached or
-                                               local)
+                                               local) or skip in headless
 ```
 
 `mutapod down` is the inverse for state-changing steps:

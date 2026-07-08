@@ -58,3 +58,15 @@ func TestLaunchAttachedContainer_UsesAttachedContainerURI(t *testing.T) {
 		t.Fatalf("expected workspace path suffix, got %q", last.Args[1])
 	}
 }
+
+func TestLaunchHeadless_DoesNotInvokeVSCode(t *testing.T) {
+	cfg := &config.Config{Name: "testproject", Dir: t.TempDir()}
+	fake := shell.NewFakeCommander()
+
+	if err := Launch(context.Background(), cfg, "mutapod-testproject", LaunchHeadless, fake); err != nil {
+		t.Fatalf("Launch(headless): %v", err)
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatalf("expected no launch calls, got %#v", fake.Calls)
+	}
+}

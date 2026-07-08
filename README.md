@@ -17,6 +17,7 @@ GCP and Azure are supported providers today.
 
 - `mutapod up`: create or start the VM, sync files, run `docker compose up`, forward ports, configure VS Code workspace integration, start lease tracking, and open VS Code attached to the main container by default
 - `mutapod up local`: same as `mutapod up`, but open the local `mutapod.code-workspace` instead of the attached-container window
+- `mutapod up headless`: same startup/sync/service/forwarding flow as `mutapod up`, but skip VS Code launch and keep the VM lease alive with at least a one-hour expiry
 - `mutapod up --build`: same as `mutapod up`, but force `docker compose` to rebuild images before starting services
 - `mutapod up --replace`: approve recreation when VM-facing YAML changed
 - `mutapod up --adopt`: mark an existing legacy VM as matching the current YAML without recreating it
@@ -38,7 +39,8 @@ GCP and Azure are supported providers today.
 4. Add a `mutapod.yaml` to your project.
 5. Run `mutapod up`, or choose a provider explicitly with `mutapod --provider azure up`.
 6. If you prefer the local workspace wrapper instead of attached-container mode, run `mutapod up local`.
-7. If you need a fresh image rebuild, use `mutapod up --build`.
+7. If you want the VM running for a remote-controlled agent without opening VS Code, run `mutapod up headless`.
+8. If you need a fresh image rebuild, use `mutapod up --build`.
 
 Mutagen is downloaded automatically into `~/.mutapod/bin` if it is not already available on `PATH`.
 mutapod itself can be updated explicitly with `mutapod update`.
@@ -368,8 +370,15 @@ Important behavior:
 - mutapod now writes VM-side lease records even when `idle.enabled: false`
 - when `idle.enabled: true`, the VM is stopped by the remote idle checker only after all leases expire
 - when `idle.enabled: false`, leases are still useful for visibility through `mutapod leases`, but `mutapod down` stops the VM immediately after releasing this workspace lease
+- `mutapod up headless` keeps the same configured idle behavior, but lease writes use a minimum one-hour expiry so phone/remote-control work is less fragile
 
 Lease records live on the VM under `/var/lib/mutapod/leases`.
+
+## Agent Guidance
+
+`mutapod up` checks `AGENTS.md` on startup. If a mutapod-managed block already exists, mutapod rewrites it and keeps it at the top of the file. If the file or block is missing, interactive runs ask before adding it; non-interactive runs add it automatically to preserve the existing startup behavior.
+
+The managed block gives agents a short topology summary and conditional rules for local-host, VM, and attached-container sessions. User-authored agent instructions should live below the mutapod block.
 
 ## VS Code Integration
 
@@ -378,6 +387,10 @@ Lease records live on the VM under `/var/lib/mutapod/leases`.
 If you want the local workspace wrapper instead, run:
 
 - `mutapod up local`
+
+If you want to start the VM, sync files, run services, and refresh the idle lease without launching VS Code, run:
+
+- `mutapod up headless`
 
 `mutapod up` also creates or updates a named Docker context for the workspace. The generated workspace then points VS Code at that context and keeps terminal access aligned with it.
 

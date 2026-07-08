@@ -44,8 +44,17 @@ func TestEnsureCreatesAgentsFile(t *testing.T) {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "This repository is developed with `mutapod`.") {
+	if !strings.HasPrefix(text, beginMarker) {
+		t.Fatalf("expected managed block at top: %s", text)
+	}
+	if !strings.Contains(text, "mutapod keeps this repository's source on the local host") {
 		t.Fatalf("missing mutapod guidance: %s", text)
+	}
+	if !strings.Contains(text, "Do not edit it by hand") {
+		t.Fatalf("missing managed-block warning: %s", text)
+	}
+	if !strings.Contains(text, "do not run `mutapod up`, `mutapod down`, `mutapod reset`, or `mutapod destroy`") {
+		t.Fatalf("missing remote environment guardrail: %s", text)
 	}
 	if !strings.Contains(text, "`mutapod up --build`") {
 		t.Fatalf("missing build guidance: %s", text)
@@ -73,6 +82,9 @@ func TestEnsureAmendsManagedBlock(t *testing.T) {
 	if !strings.Contains(text, "Keep this.") {
 		t.Fatal("expected existing content to be preserved")
 	}
+	if !strings.HasPrefix(text, beginMarker) {
+		t.Fatalf("expected managed block to move to top:\n%s", text)
+	}
 	if strings.Contains(text, "\nold\n") {
 		t.Fatal("expected old managed block to be replaced")
 	}
@@ -81,7 +93,7 @@ func TestEnsureAmendsManagedBlock(t *testing.T) {
 	}
 }
 
-func TestEnsureAppendsManagedBlockWhenMissingMarkers(t *testing.T) {
+func TestEnsurePrependsManagedBlockWhenMissingMarkers(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir)
 	path := filepath.Join(dir, filename)
@@ -101,7 +113,123 @@ func TestEnsureAppendsManagedBlockWhenMissingMarkers(t *testing.T) {
 	if !strings.Contains(text, "# Existing") {
 		t.Fatal("expected existing content to remain")
 	}
+	if !strings.HasPrefix(text, beginMarker) {
+		t.Fatalf("expected managed block at top:\n%s", text)
+	}
 	if !strings.Contains(text, beginMarker) || !strings.Contains(text, endMarker) {
-		t.Fatal("expected managed block markers to be appended")
+		t.Fatal("expected managed block markers to be present")
+	}
+}
+
+func TestEnsureReplacesFuzzyTopMutapodBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	path := filepath.Join(dir, filename)
+	original := strings.Join([]string{
+		"<!-- mutapod begin -->",
+		"## Mutapod",
+		"",
+		"This managed block is managed by mutapod, but the markers were edited.",
+		"",
+		"Project setup:",
+		"- Workspace name: `old`",
+		"- Remote workspace path: `/workspace/old`",
+		"",
+		"<!-- mutapod end -->",
+		"",
+		"# Existing",
+		"",
+		"Keep this.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	if _, err := Ensure(cfg); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	text := string(data)
+	if strings.Count(text, beginMarker) != 1 {
+		t.Fatalf("expected exactly one managed begin marker:\n%s", text)
+	}
+	if strings.Contains(text, "mutapod begin") || strings.Contains(text, "mutapod end") || strings.Contains(text, "Workspace name: `old`") {
+		t.Fatalf("expected damaged block to be replaced:\n%s", text)
+	}
+	if !strings.Contains(text, "# Existing") || !strings.Contains(text, "Keep this.") {
+		t.Fatalf("expected existing content to be preserved:\n%s", text)
+	}
+}
+
+func TestEnsureDoesNotFuzzyReplaceNonTopMutapodSection(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	path := filepath.Join(dir, filename)
+	original := "# Existing\n\n## Mutapod\n\nHuman note mentioning mutapod up.\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	if _, err := Ensure(cfg); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	text := string(data)
+	if !strings.HasPrefix(text, beginMarker) {
+		t.Fatalf("expected new managed block at top:\n%s", text)
+	}
+	if !strings.Contains(text, "# Existing") || !strings.Contains(text, "Human note mentioning mutapod up.") {
+		t.Fatalf("expected existing non-top Mutapod note to be preserved:\n%s", text)
+	}
+}
+
+func TestInspectReportsManagedBlockState(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+
+	status, err := Inspect(cfg)
+	if err != nil {
+		t.Fatalf("Inspect missing file: %v", err)
+	}
+	if status.Exists || status.HasManagedBlock {
+		t.Fatalf("unexpected missing-file status: %#v", status)
+	}
+
+	if _, err := Ensure(cfg); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	status, err = Inspect(cfg)
+	if err != nil {
+		t.Fatalf("Inspect managed file: %v", err)
+	}
+	if !status.Exists || !status.HasManagedBlock {
+		t.Fatalf("unexpected managed-file status: %#v", status)
+	}
+}
+
+func TestInspectReportsFuzzyTopMutapodBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	path := filepath.Join(dir, filename)
+	original := "<!-- mutapod begin -->\n## Mutapod\n\nWorkspace name: `old`\nRemote workspace path: `/workspace/old`\n<!-- mutapod end -->\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	status, err := Inspect(cfg)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if !status.Exists || !status.HasManagedBlock {
+		t.Fatalf("unexpected fuzzy managed-file status: %#v", status)
 	}
 }

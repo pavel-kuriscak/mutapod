@@ -11,7 +11,7 @@ import (
 
 // PrintInstructions prints everything the user needs to work locally while the
 // runtime stays on the remote VM.
-func PrintInstructions(cfg *config.Config, sshCfg *provider.SSHConfig, ports []int) {
+func PrintInstructions(cfg *config.Config, sshCfg *provider.SSHConfig, ports []int, launchMode LaunchMode) {
 	workspaceFile := workspaceFilename
 	dockerContext := cfg.InstanceName()
 
@@ -20,8 +20,18 @@ func PrintInstructions(cfg *config.Config, sshCfg *provider.SSHConfig, ports []i
 	fmt.Printf("  mutapod ready: %s\n", cfg.Name)
 	fmt.Println("=======================================================")
 	fmt.Println()
-	fmt.Println("  mutapod up auto-opens VS Code attached to the main container.")
-	fmt.Println("  Use `mutapod up local` if you want the local mutapod workspace window instead.")
+	switch launchMode {
+	case LaunchHeadless:
+		fmt.Println("  Headless mode is active; VS Code launch was skipped.")
+		fmt.Println("  Use `mutapod up` later to open VS Code attached to the main container.")
+	case LaunchLocal:
+		fmt.Println("  mutapod opened the local workspace wrapper.")
+		fmt.Println("  Use `mutapod up` if you want the attached-container window instead.")
+	default:
+		fmt.Println("  mutapod up auto-opens VS Code attached to the main container.")
+		fmt.Println("  Use `mutapod up local` if you want the local mutapod workspace window instead.")
+	}
+	fmt.Println("  Use `mutapod up headless` when you want startup, sync, services, and keepalive without VS Code.")
 	fmt.Println()
 	fmt.Println("  Local workspace command:")
 	fmt.Printf("    code %q\n", workspaceFile)

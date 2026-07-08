@@ -24,7 +24,7 @@ func TestPrintInstructions_LocalWorkflow(t *testing.T) {
 	sshCfg := &provider.SSHConfig{Host: "mutapod-testproject.example"}
 
 	output := captureStdout(t, func() {
-		PrintInstructions(cfg, sshCfg, []int{5000, 8080})
+		PrintInstructions(cfg, sshCfg, []int{5000, 8080}, LaunchAttached)
 	})
 
 	if !strings.Contains(output, `code "mutapod.code-workspace"`) {
@@ -35,6 +35,9 @@ func TestPrintInstructions_LocalWorkflow(t *testing.T) {
 	}
 	if !strings.Contains(output, "mutapod up local") {
 		t.Fatalf("expected local launch hint, got:\n%s", output)
+	}
+	if !strings.Contains(output, "mutapod up headless") {
+		t.Fatalf("expected headless launch hint, got:\n%s", output)
 	}
 	if strings.Contains(output, "vscode-remote://") {
 		t.Fatalf("did not expect Remote-SSH folder URI, got:\n%s", output)
@@ -59,6 +62,26 @@ func TestPrintInstructions_LocalWorkflow(t *testing.T) {
 	}
 	if strings.Contains(output, "Reopen in Container") {
 		t.Fatalf("did not expect reopen-in-container recommendation, got:\n%s", output)
+	}
+}
+
+func TestPrintInstructions_Headless(t *testing.T) {
+	cfg := &config.Config{
+		Name:          "testproject",
+		InstanceOwner: "tester",
+		Sync:          config.SyncConfig{RemotePath: "/workspace/testproject"},
+	}
+	sshCfg := &provider.SSHConfig{Host: "mutapod-testproject.example"}
+
+	output := captureStdout(t, func() {
+		PrintInstructions(cfg, sshCfg, nil, LaunchHeadless)
+	})
+
+	if !strings.Contains(output, "Headless mode is active; VS Code launch was skipped.") {
+		t.Fatalf("expected headless hint, got:\n%s", output)
+	}
+	if strings.Contains(output, "auto-opens VS Code attached") {
+		t.Fatalf("headless output should not claim VS Code was opened:\n%s", output)
 	}
 }
 

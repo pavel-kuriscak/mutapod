@@ -187,6 +187,10 @@ func freshState(name string) *state.State {
 }
 
 func confirmYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
+	return confirmYesNoDefault(in, out, prompt, false)
+}
+
+func confirmYesNoDefault(in io.Reader, out io.Writer, prompt string, defaultYes bool) (bool, error) {
 	fmt.Fprint(out, prompt)
 	line, err := readLine(in)
 	if err != nil {
@@ -195,6 +199,10 @@ func confirmYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true, nil
+	case "n", "no":
+		return false, nil
+	case "":
+		return defaultYes, nil
 	default:
 		return false, nil
 	}

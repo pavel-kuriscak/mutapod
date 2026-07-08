@@ -21,6 +21,10 @@ import (
 	mutagensync "github.com/mutapod/mutapod/internal/sync"
 )
 
+const headlessMinimumLease = time.Hour
+
+var idleHeartbeatMinLeaseMinutes int
+
 func idleHeartbeatCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "idle-heartbeat",
@@ -28,6 +32,7 @@ func idleHeartbeatCmd() *cobra.Command {
 		Hidden: true,
 		RunE:   runIdleHeartbeat,
 	}
+	cmd.Flags().IntVar(&idleHeartbeatMinLeaseMinutes, "min-lease-minutes", 0, "minimum lease expiry in minutes")
 	return cmd
 }
 
@@ -75,6 +80,7 @@ func runIdleHeartbeat(_ *cobra.Command, _ []string) error {
 	hostID, _ := os.Hostname()
 	ctx := context.Background()
 	interval := idle.HeartbeatInterval(cfg)
+	minLease := heartbeatMinimumLease()
 
 	for {
 		status, err := syncMgr.SyncStatus(ctx)
@@ -85,7 +91,7 @@ func runIdleHeartbeat(_ *cobra.Command, _ []string) error {
 			return nil
 		}
 
-		expiresAt := idle.LeaseExpiry(cfg, time.Now())
+		expiresAt := idle.LeaseExpiryWithMinimum(cfg, time.Now(), minLease)
 		if err := idle.WriteLeaseWithClient(ctx, client, cfg.Name, hostID, expiresAt); err != nil {
 			shell.Debugf("idle heartbeat write lease: %v", err)
 			return nil
@@ -93,6 +99,13 @@ func runIdleHeartbeat(_ *cobra.Command, _ []string) error {
 
 		time.Sleep(interval)
 	}
+}
+
+func heartbeatMinimumLease() time.Duration {
+	if idleHeartbeatMinLeaseMinutes <= 0 {
+		return 0
+	}
+	return time.Duration(idleHeartbeatMinLeaseMinutes) * time.Minute
 }
 
 type idleLeaseRefresher struct {
@@ -111,19 +124,23 @@ func (r *idleLeaseRefresher) Stop() {
 	})
 }
 
-func maybeConfigureIdleLease(ctx context.Context, cfg *config.Config, prov provider.Provider, sshCfg *provider.SSHConfig) (*idleLeaseRefresher, error) {
+type leaseOptions struct {
+	MinimumExpiry time.Duration
+}
+
+func maybeConfigureIdleLease(ctx context.Context, cfg *config.Config, prov provider.Provider, sshCfg *provider.SSHConfig, opts leaseOptions) (*idleLeaseRefresher, error) {
 	step("Configuring lease tracking...")
 	sshClient := sshrun.New(sshCfg.IP, sshCfg.Port, sshCfg.User, sshCfg.IdentityFile)
 	hostID, _ := os.Hostname()
 
-	if err := idle.WriteLeaseWithRetry(ctx, sshClient, cfg.Name, hostID, idle.LeaseExpiry(cfg, time.Now())); err != nil {
+	if err := idle.WriteLeaseWithRetry(ctx, sshClient, cfg.Name, hostID, leaseExpiry(cfg, opts)); err != nil {
 		shell.Debugf("idle: early lease refresh before install: %v", err)
 	}
 	if err := idle.InstallRemote(ctx, prov); err != nil {
 		return nil, err
 	}
 
-	if err := idle.WriteLeaseWithRetry(ctx, sshClient, cfg.Name, hostID, idle.LeaseExpiry(cfg, time.Now())); err != nil {
+	if err := idle.WriteLeaseWithRetry(ctx, sshClient, cfg.Name, hostID, leaseExpiry(cfg, opts)); err != nil {
 		return nil, fmt.Errorf("idle: write initial lease: %w", err)
 	}
 	if cfg.Idle.IsEnabled() {
@@ -131,7 +148,7 @@ func maybeConfigureIdleLease(ctx context.Context, cfg *config.Config, prov provi
 			return nil, fmt.Errorf("idle: enable timer: %w", err)
 		}
 	}
-	refresher := startInProcessIdleLeaseRefresher(ctx, cfg, sshClient, hostID)
+	refresher := startInProcessIdleLeaseRefresher(ctx, cfg, sshClient, hostID, opts)
 	if cfg.Idle.IsEnabled() {
 		ok("Idle shutdown lease active")
 	} else {
@@ -140,7 +157,7 @@ func maybeConfigureIdleLease(ctx context.Context, cfg *config.Config, prov provi
 	return refresher, nil
 }
 
-func startInProcessIdleLeaseRefresher(parent context.Context, cfg *config.Config, client *sshrun.Client, hostID string) *idleLeaseRefresher {
+func startInProcessIdleLeaseRefresher(parent context.Context, cfg *config.Config, client *sshrun.Client, hostID string, opts leaseOptions) *idleLeaseRefresher {
 	ctx, cancel := context.WithCancel(parent)
 	refresher := &idleLeaseRefresher{
 		cancel: cancel,
@@ -156,7 +173,7 @@ func startInProcessIdleLeaseRefresher(parent context.Context, cfg *config.Config
 			case <-time.After(interval):
 			}
 
-			expiresAt := idle.LeaseExpiry(cfg, time.Now())
+			expiresAt := leaseExpiry(cfg, opts)
 			if err := idle.WriteLeaseWithClient(ctx, client, cfg.Name, hostID, expiresAt); err != nil {
 				shell.Debugf("idle: in-process lease refresh: %v", err)
 			}
@@ -165,9 +182,13 @@ func startInProcessIdleLeaseRefresher(parent context.Context, cfg *config.Config
 	return refresher
 }
 
-func maybeStartIdleHeartbeat(cfg *config.Config) error {
+func leaseExpiry(cfg *config.Config, opts leaseOptions) time.Time {
+	return idle.LeaseExpiryWithMinimum(cfg, time.Now(), opts.MinimumExpiry)
+}
+
+func maybeStartIdleHeartbeat(cfg *config.Config, opts leaseOptions) error {
 	step("Starting lease heartbeat...")
-	if err := startIdleHeartbeat(cfg); err != nil {
+	if err := startIdleHeartbeat(cfg, opts); err != nil {
 		return fmt.Errorf("idle: start heartbeat: %w", err)
 	}
 	if cfg.Idle.IsEnabled() {
@@ -178,21 +199,13 @@ func maybeStartIdleHeartbeat(cfg *config.Config) error {
 	return nil
 }
 
-func startIdleHeartbeat(cfg *config.Config) error {
+func startIdleHeartbeat(cfg *config.Config, opts leaseOptions) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve current executable: %w", err)
 	}
 
-	args := []string{"idle-heartbeat"}
-	if cfgFile != "" {
-		args = append(args, "--config", cfgFile)
-	} else {
-		args = append(args, "--config", configPath(cfg))
-	}
-	if providerOverride != "" {
-		args = append(args, "--provider", providerOverride)
-	}
+	args := idleHeartbeatArgs(cfg, opts)
 
 	cmd := exec.Command(exe, args...)
 	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -208,6 +221,25 @@ func startIdleHeartbeat(cfg *config.Config) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func idleHeartbeatArgs(cfg *config.Config, opts leaseOptions) []string {
+	args := []string{"idle-heartbeat"}
+	if cfgFile != "" {
+		args = append(args, "--config", cfgFile)
+	} else {
+		args = append(args, "--config", configPath(cfg))
+	}
+	if providerOverride != "" {
+		args = append(args, "--provider", providerOverride)
+	}
+	if opts.MinimumExpiry > 0 {
+		minutes := int(opts.MinimumExpiry / time.Minute)
+		if minutes > 0 {
+			args = append(args, fmt.Sprintf("--min-lease-minutes=%d", minutes))
+		}
+	}
+	return args
 }
 
 func maybeHandleIdleDown(ctx context.Context, cfg *config.Config, prov provider.Provider) error {

@@ -31,7 +31,7 @@ import (
 
 func upCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "up [local|container]",
+		Use:   "up [local|container|headless]",
 		Short: "Provision VM, sync files, and start services",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runUp,
@@ -80,17 +80,22 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.LaunchMode, buildImages bool, vmOpts vmUpOptions) error {
 	step("Loaded config: %s (%s)", cfg.Name, cfg.Provider.Type)
+	leaseOpts := leaseOptionsForLaunchMode(launchMode)
 
 	if err := confirmMissingIgnoreFile(os.Stdin, os.Stdout, cfg); err != nil {
 		return err
 	}
 
 	step("Updating AGENTS.md...")
-	agentsPath, err := agents.Ensure(cfg)
+	agentsPath, ensured, err := ensureAgentsForStartup(vmOpts.In, vmOpts.Out, vmOpts.Interactive, cfg)
 	if err != nil {
 		return err
 	}
-	ok("AGENTS.md ready: %s", agentsPath)
+	if ensured {
+		ok("AGENTS.md ready: %s", agentsPath)
+	} else {
+		ok("AGENTS.md mutapod block skipped")
+	}
 
 	step("Checking local dependencies...")
 	mutagenPath, err := deps.MutagenPath()
@@ -140,7 +145,7 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 	}
 	ok("SSH host: %s", sshCfg.Host)
 
-	idleRefresher, err := maybeConfigureIdleLease(ctx, cfg, prov, sshCfg)
+	idleRefresher, err := maybeConfigureIdleLease(ctx, cfg, prov, sshCfg, leaseOpts)
 	if err != nil {
 		return err
 	}
@@ -548,18 +553,22 @@ func runUpWithConfig(ctx context.Context, cfg *config.Config, launchMode vscode.
 		}
 	}
 
-	if err := maybeStartIdleHeartbeat(cfg); err != nil {
+	if err := maybeStartIdleHeartbeat(cfg, leaseOpts); err != nil {
 		return err
 	}
 	idleRefresher.Stop()
 	idleRefresher = nil
 
-	vscode.PrintInstructions(cfg, sshCfg, ports)
-	step("Opening VS Code (%s)...", launchMode)
-	if err := vscode.Launch(ctx, cfg, dockerContext, launchMode, shell.DefaultCommander); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: VS Code launch failed: %v\n", err)
+	vscode.PrintInstructions(cfg, sshCfg, ports, launchMode)
+	if launchMode == vscode.LaunchHeadless {
+		ok("VS Code launch skipped (headless)")
 	} else {
-		ok("VS Code opened (%s)", launchMode)
+		step("Opening VS Code (%s)...", launchMode)
+		if err := vscode.Launch(ctx, cfg, dockerContext, launchMode, shell.DefaultCommander); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: VS Code launch failed: %v\n", err)
+		} else {
+			ok("VS Code opened (%s)", launchMode)
+		}
 	}
 	return nil
 }
@@ -1150,6 +1159,49 @@ func loadConfig() (*config.Config, error) {
 	return config.LoadWithOptions(cwd, opts)
 }
 
+func ensureAgentsForStartup(in io.Reader, out io.Writer, interactive bool, cfg *config.Config) (string, bool, error) {
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stdout
+	}
+
+	status, err := agents.Inspect(cfg)
+	if err != nil {
+		return "", false, err
+	}
+	if status.Exists && status.HasManagedBlock {
+		path, err := agents.Ensure(cfg)
+		return path, true, err
+	}
+
+	if !interactive {
+		if !status.Exists {
+			fmt.Fprintf(out, "AGENTS.md was not found in %s; adding the mutapod-managed block.\n", cfg.Dir)
+		} else {
+			fmt.Fprintln(out, "AGENTS.md does not contain the mutapod-managed block; adding it at the top.")
+		}
+		path, err := agents.Ensure(cfg)
+		return path, true, err
+	}
+
+	prompt := "AGENTS.md does not contain the mutapod-managed block. Add it at the top? [Y/n]: "
+	if !status.Exists {
+		prompt = "AGENTS.md was not found. Create it with the mutapod-managed block? [Y/n]: "
+	}
+	confirmed, err := confirmYesNoDefault(in, out, prompt, true)
+	if err != nil {
+		return "", false, err
+	}
+	if !confirmed {
+		fmt.Fprintln(out, "Skipped the mutapod-managed AGENTS.md block.")
+		return status.Path, false, nil
+	}
+	path, err := agents.Ensure(cfg)
+	return path, true, err
+}
+
 func confirmMissingIgnoreFile(in io.Reader, out io.Writer, cfg *config.Config) error {
 	path := filepath.Join(cfg.Dir, ignore.Filename)
 	if _, err := os.Stat(path); err == nil {
@@ -1183,7 +1235,16 @@ func parseUpLaunchMode(args []string) (vscode.LaunchMode, error) {
 		return vscode.LaunchLocal, nil
 	case string(vscode.LaunchAttached):
 		return vscode.LaunchAttached, nil
+	case string(vscode.LaunchHeadless):
+		return vscode.LaunchHeadless, nil
 	default:
-		return "", fmt.Errorf("up: unsupported mode %q (expected: local or container)", args[0])
+		return "", fmt.Errorf("up: unsupported mode %q (expected: local, container, or headless)", args[0])
 	}
+}
+
+func leaseOptionsForLaunchMode(mode vscode.LaunchMode) leaseOptions {
+	if mode == vscode.LaunchHeadless {
+		return leaseOptions{MinimumExpiry: headlessMinimumLease}
+	}
+	return leaseOptions{}
 }

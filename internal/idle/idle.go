@@ -244,6 +244,18 @@ func LeaseExpiry(cfg *config.Config, now time.Time) time.Time {
 	return now.Add(time.Duration(minutes) * time.Minute)
 }
 
+func LeaseExpiryWithMinimum(cfg *config.Config, now time.Time, minimum time.Duration) time.Time {
+	expiresAt := LeaseExpiry(cfg, now)
+	if minimum <= 0 {
+		return expiresAt
+	}
+	minimumExpiry := now.Add(minimum)
+	if expiresAt.Before(minimumExpiry) {
+		return minimumExpiry
+	}
+	return expiresAt
+}
+
 func retrySSHReady(ctx context.Context, operation string, fn func() error) error {
 	deadline := time.Now().Add(sshRetryTimeout)
 	for {

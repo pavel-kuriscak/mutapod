@@ -20,6 +20,7 @@ type LaunchMode string
 const (
 	LaunchAttached LaunchMode = "container"
 	LaunchLocal    LaunchMode = "local"
+	LaunchHeadless LaunchMode = "headless"
 )
 
 func Launch(ctx context.Context, cfg *config.Config, dockerContext string, mode LaunchMode, cmd shell.Commander) error {
@@ -28,6 +29,8 @@ func Launch(ctx context.Context, cfg *config.Config, dockerContext string, mode 
 		return launchLocalWorkspace(ctx, cfg, cmd)
 	case LaunchAttached:
 		return launchAttachedContainer(ctx, cfg, dockerContext, cmd)
+	case LaunchHeadless:
+		return nil
 	default:
 		return fmt.Errorf("vscode: unsupported launch mode %q", mode)
 	}
