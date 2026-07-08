@@ -80,6 +80,8 @@ internal/
     leases.go               `mutapod leases` — list VM-side lease records
     idle.go                 `mutapod idle-heartbeat` — runs in background
                             during VS Code/headless usage to refresh the lease
+    up.go                   `mutapod ssh` for VM shells/commands and
+                            `mutapod exec` for primary-service container commands
     version.go              `version` and `update` commands
     autoupdate.go           prompt-on-launch update check (skipped for
                             certain subcommands and non-TTY runs)

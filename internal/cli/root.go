@@ -40,6 +40,7 @@ to it via Mutagen, starts a devcontainer, and forwards ports — all with one co
 	root.AddCommand(destroyCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(sshCmd())
+	root.AddCommand(execCmd())
 	root.AddCommand(leasesCmd())
 	root.AddCommand(idleHeartbeatCmd())
 	root.AddCommand(versionCmd())

@@ -53,6 +53,15 @@ func TestEnsureCreatesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "Do not edit it by hand") {
 		t.Fatalf("missing managed-block warning: %s", text)
 	}
+	if !strings.Contains(text, "`mutapod ssh -- <command>` runs a non-interactive command on the VM") {
+		t.Fatalf("missing VM command guidance: %s", text)
+	}
+	if !strings.Contains(text, "`mutapod exec -- <command>` is container-level") {
+		t.Fatalf("missing container exec guidance: %s", text)
+	}
+	if !strings.Contains(text, "over provider-specific SSH commands such as `gcloud compute ssh` or `az ssh vm`") {
+		t.Fatalf("missing provider-specific SSH guardrail: %s", text)
+	}
 	if !strings.Contains(text, "do not run `mutapod up`, `mutapod down`, `mutapod reset`, or `mutapod destroy`") {
 		t.Fatalf("missing remote environment guardrail: %s", text)
 	}

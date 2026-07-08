@@ -28,7 +28,8 @@ GCP and Azure are supported providers today.
 - `mutapod version`: show the installed mutapod version and build metadata
 - `mutapod update --check`: check GitHub Releases and report whether a newer mutapod release is available
 - `mutapod update`: download the latest GitHub release for your platform, verify its checksum, and replace the local mutapod binary
-- `mutapod ssh`: open an interactive shell on the remote VM
+- `mutapod ssh`: open an interactive shell on the remote VM, or run a non-interactive VM command with `mutapod ssh -- <command>`
+- `mutapod exec -- <command>`: run a command inside `compose.primary_service` on the remote VM
 - `mutapod leases`: show the VM-side mutapod lease records, including last heartbeat and expiry
 
 ## Quick Start

@@ -720,8 +720,9 @@ func statusCmd() *cobra.Command {
 
 func sshCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "ssh",
-		Short: "Open a shell on the remote VM",
+		Use:   "ssh [-- command...]",
+		Short: "Open a shell or run a command on the remote VM",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			cfg, err := loadConfig()
@@ -732,17 +733,66 @@ func sshCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := prov.SSHConfig(ctx); err != nil {
-				return err
-			}
-			return prov.Exec(ctx, []string{}, provider.ExecOptions{
-				Stdin:  os.Stdin,
-				Stdout: os.Stdout,
-				Stderr: os.Stderr,
-				Tty:    true,
-			})
+			return runSSH(ctx, prov, args)
 		},
 	}
+}
+
+func runSSH(ctx context.Context, prov provider.Provider, args []string) error {
+	if _, err := prov.SSHConfig(ctx); err != nil {
+		return err
+	}
+	opts := provider.ExecOptions{
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
+	if len(args) == 0 {
+		opts.Tty = true
+	}
+	return prov.Exec(ctx, args, opts)
+}
+
+func execCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "exec -- command...",
+		Short: "Run a command in the primary service container",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			prov, err := provider.New(cfg, shell.DefaultCommander)
+			if err != nil {
+				return err
+			}
+			return runExec(ctx, cfg, prov, args)
+		},
+	}
+}
+
+func runExec(ctx context.Context, cfg *config.Config, prov provider.Provider, args []string) error {
+	if cfg.Compose.PrimaryService == "" {
+		return fmt.Errorf("exec requires compose.primary_service in mutapod.yaml")
+	}
+	if _, err := prov.SSHConfig(ctx); err != nil {
+		return err
+	}
+	activeProfiles, err := profiles.Active(cfg)
+	if err != nil {
+		return err
+	}
+	return compose.ExecInPrimaryService(ctx, prov, cfg, activeProfiles, commandScript(args))
+}
+
+func commandScript(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return "exec " + strings.Join(quoted, " ")
 }
 
 func step(format string, args ...any) {
