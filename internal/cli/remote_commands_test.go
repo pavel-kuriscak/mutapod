@@ -131,10 +131,13 @@ func TestRunExecUsesPrimaryServiceContainer(t *testing.T) {
 	if prov.execOpts.Tty {
 		t.Fatal("expected container exec command not to request TTY")
 	}
+	if prov.execOpts.Stdin == nil || prov.execOpts.Stdout == nil || prov.execOpts.Stderr == nil {
+		t.Fatal("expected container exec command to attach standard streams")
+	}
 	remote := prov.execCmd[2]
 	for _, expected := range []string{
 		"cd '/workspace/demo'",
-		"sudo docker compose exec -T --user root 'web' sh -lc",
+		"sudo docker compose exec -T --user root 'web' sh -c",
 		"exec '\\''python'\\'' '\\''manage.py'\\'' '\\''check'\\''",
 	} {
 		if !strings.Contains(remote, expected) {

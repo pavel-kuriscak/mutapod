@@ -59,8 +59,20 @@ func TestEnsureCreatesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "`mutapod exec -- <command>` is container-level") {
 		t.Fatalf("missing container exec guidance: %s", text)
 	}
+	if !strings.Contains(text, "streams stdout/stderr, and uses a non-login `sh -c` shell") {
+		t.Fatalf("missing exec shell/output caveat: %s", text)
+	}
 	if !strings.Contains(text, "over provider-specific SSH commands such as `gcloud compute ssh` or `az ssh vm`") {
 		t.Fatalf("missing provider-specific SSH guardrail: %s", text)
+	}
+	if !strings.Contains(text, "Docker Compose interpolates `$...` in `.env` values") {
+		t.Fatalf("missing env interpolation caveat: %s", text)
+	}
+	if !strings.Contains(text, "File mirroring is asynchronous during active work") {
+		t.Fatalf("missing file mirroring delay caveat: %s", text)
+	}
+	if !strings.Contains(text, "verify the local path, remote workspace path, and in-container workspace path") {
+		t.Fatalf("missing file mirroring verification guidance: %s", text)
 	}
 	if !strings.Contains(text, "do not run `mutapod up`, `mutapod down`, `mutapod reset`, or `mutapod destroy`") {
 		t.Fatalf("missing remote environment guardrail: %s", text)

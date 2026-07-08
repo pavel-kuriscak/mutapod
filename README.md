@@ -29,7 +29,7 @@ GCP and Azure are supported providers today.
 - `mutapod update --check`: check GitHub Releases and report whether a newer mutapod release is available
 - `mutapod update`: download the latest GitHub release for your platform, verify its checksum, and replace the local mutapod binary
 - `mutapod ssh`: open an interactive shell on the remote VM, or run a non-interactive VM command with `mutapod ssh -- <command>`
-- `mutapod exec -- <command>`: run a command inside `compose.primary_service` on the remote VM
+- `mutapod exec -- <command>`: run a command inside `compose.primary_service` on the remote VM, streaming stdout/stderr and preserving the container's normal non-login shell environment
 - `mutapod leases`: show the VM-side mutapod lease records, including last heartbeat and expiry
 
 ## Quick Start
@@ -276,6 +276,8 @@ For the common case, you can omit `sync` entirely. The defaults already mean:
 `docker compose` is executed remotely from the synced workspace directory.
 
 When `compose.primary_service` and `compose.workspace_folder` are set, mutapod automatically injects a compose override on the remote VM to bind-mount the synced workspace into that service if the base compose file doesn't already do it. This is what enables the intended "edit locally, sync to VM, see changes live in the remote container" workflow even for repos whose compose file wasn't written specifically for mutapod.
+
+Docker Compose still applies its normal interpolation rules to project `.env` files before containers see those values. If a literal dollar sign must reach the container, escape it as `$$` in `.env` or use Compose raw env-file mode when your Compose version supports it.
 
 When `compose.forward_backend` is `ssh`, mutapod starts compressed OpenSSH tunnels for the discovered ports. This is the default because it is faster for large assets than Mutagen forwarding. When `compose.primary_service` is set, mutapod also prepares loopback relays inside that container for its published target ports, so local-style servers such as plain `python manage.py runserver` can keep listening on `127.0.0.1:<port>` inside the container. If a process already listens on the container interface, the relay for that port exits quietly because it is not needed.
 

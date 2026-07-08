@@ -83,7 +83,7 @@ func renderManagedBlock(cfg *config.Config) string {
 		"- First check where you are running: current working directory, hostname, whether `mutapod` is on PATH, whether the path is the remote workspace, and whether the shell is inside a container.",
 		"- If you are on the local host and `mutapod` is available, use `mutapod status`, `mutapod leases`, and `mutapod ssh` to inspect the VM.",
 		"- `mutapod ssh` is VM-level: bare `mutapod ssh` opens an interactive VM shell, and `mutapod ssh -- <command>` runs a non-interactive command on the VM.",
-		"- `mutapod exec -- <command>` is container-level: it runs the command inside `compose.primary_service` through Docker Compose on the VM.",
+		"- `mutapod exec -- <command>` is container-level: it runs the command inside `compose.primary_service` through Docker Compose on the VM, streams stdout/stderr, and uses a non-login `sh -c` shell so the container's normal PATH is preserved.",
 		"- Prefer `mutapod ssh -- <command>` or `mutapod exec -- <command>` over provider-specific SSH commands such as `gcloud compute ssh` or `az ssh vm`, unless you are debugging mutapod's provider integration.",
 		"- From the local host, use `mutapod up`, `mutapod up local`, or `mutapod up headless` to start the environment, and `mutapod up --build` when container images need rebuilding.",
 		"- If you are already inside the remote VM or attached container, do not run `mutapod up`, `mutapod down`, `mutapod reset`, or `mutapod destroy`; work in the current checkout/container and use normal project commands.",
@@ -100,7 +100,9 @@ func renderManagedBlock(cfg *config.Config) string {
 		"Important troubleshooting notes:",
 		"- Source of truth is `mutapod.yaml` in this repository.",
 		"- Code is normally synced between the local host and remote VM with Mutagen.",
+		"- File mirroring is asynchronous during active work. After creating or editing files, allow a short sync delay and verify the local path, remote workspace path, and in-container workspace path before concluding that sync or mounts are broken.",
 		"- Docker Compose normally runs on the remote VM, but attached-container shells may already be inside the runtime.",
+		"- Docker Compose interpolates `$...` in `.env` values before containers see them; escape literal dollar signs as `$$` or use Compose raw env-file mode when supported.",
 		"- `mutapod up` waits for the initial sync flush and checks for Mutagen transition problems before building or opening VS Code.",
 		"- If a remote build/runtime issue looks stale, rerun `mutapod up --build` from the local host.",
 	}

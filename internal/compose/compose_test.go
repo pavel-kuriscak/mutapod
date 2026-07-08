@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/mutapod/mutapod/internal/config"
 	"github.com/mutapod/mutapod/internal/profiles"
+	"github.com/mutapod/mutapod/internal/provider"
 	"github.com/mutapod/mutapod/internal/shell"
 )
 
@@ -26,6 +28,54 @@ func writeCompose(t *testing.T, dir, name, content string) string {
 func cfg(dir string) *config.Config {
 	return &config.Config{Dir: dir, Name: "test"}
 }
+
+type fakeExec struct {
+	cmd  []string
+	opts provider.ExecOptions
+}
+
+type fakeProvider struct {
+	execs []fakeExec
+}
+
+func (p *fakeProvider) Name() string { return "test" }
+
+func (p *fakeProvider) EnsureInstance(context.Context) (provider.InstanceState, error) {
+	return provider.StateRunning, nil
+}
+
+func (p *fakeProvider) State(context.Context) (provider.InstanceState, error) {
+	return provider.StateRunning, nil
+}
+
+func (p *fakeProvider) InstanceMetadata(context.Context) (provider.InstanceMetadata, error) {
+	return provider.InstanceMetadata{}, nil
+}
+
+func (p *fakeProvider) AdoptInstance(context.Context, string) error { return nil }
+
+func (p *fakeProvider) InstanceID(context.Context) (string, error) { return "test-instance", nil }
+
+func (p *fakeProvider) SSHConfig(context.Context) (*provider.SSHConfig, error) {
+	return &provider.SSHConfig{Host: "test-host"}, nil
+}
+
+func (p *fakeProvider) Exec(_ context.Context, cmd []string, opts provider.ExecOptions) error {
+	p.execs = append(p.execs, fakeExec{cmd: append([]string(nil), cmd...), opts: opts})
+	return nil
+}
+
+func (p *fakeProvider) CopyFile(context.Context, string, string) error { return nil }
+
+func (p *fakeProvider) PreferredSyncBackend() provider.SyncBackend {
+	return provider.SyncMutagen
+}
+
+func (p *fakeProvider) StopInstance(context.Context) error { return nil }
+
+func (p *fakeProvider) DeleteInstance(context.Context) error { return nil }
+
+func (p *fakeProvider) ForwardedWorkspacePath() string { return "/workspace/test" }
 
 func TestDetectFile_AutoDetect(t *testing.T) {
 	dir := t.TempDir()
@@ -428,6 +478,32 @@ func TestRemoteComposeArgs_WithWorkspaceOverride(t *testing.T) {
 	}
 	if args != " -f 'compose.yaml' -f '.mutapod.compose.override.yaml'" {
 		t.Fatalf("args: got %q", args)
+	}
+}
+
+func TestExecInPrimaryServiceWithOptionsUsesNonLoginShell(t *testing.T) {
+	dir := t.TempDir()
+	writeCompose(t, dir, "compose.yaml", "services: {}")
+	c := cfg(dir)
+	c.Compose.PrimaryService = "web"
+	p := &fakeProvider{}
+
+	err := ExecInPrimaryServiceWithOptions(context.Background(), p, c, nil, "command -v python", PrimaryServiceExecOptions{
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("ExecInPrimaryServiceWithOptions: %v", err)
+	}
+	if len(p.execs) != 1 {
+		t.Fatalf("exec count: got %d, want 1", len(p.execs))
+	}
+	cmd := strings.Join(p.execs[0].cmd, " ")
+	if !strings.Contains(cmd, "sh -c") {
+		t.Fatalf("expected non-login shell command:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "sh -lc") {
+		t.Fatalf("expected command not to use login shell:\n%s", cmd)
 	}
 }
 

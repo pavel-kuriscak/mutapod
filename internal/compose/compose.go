@@ -5,6 +5,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -609,10 +610,29 @@ func ConfigureGitSafeDirectory(ctx context.Context, p provider.Provider, cfg *co
 	return ExecInPrimaryService(ctx, p, cfg, activeProfiles, script)
 }
 
+// PrimaryServiceExecOptions controls how output from a primary-service command
+// is connected to the local process.
+type PrimaryServiceExecOptions struct {
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
 // ExecInPrimaryService runs a shell script inside the primary service
-// container. It uses `docker compose exec -T --user root` so mutapod can
-// install helper tooling predictably.
+// container, keeping output quiet unless debug mode is enabled. It uses
+// `docker compose exec -T --user root` so mutapod can install helper tooling
+// predictably.
 func ExecInPrimaryService(ctx context.Context, p provider.Provider, cfg *config.Config, activeProfiles []profiles.Spec, script string) error {
+	outWriter, errWriter := shell.DebugWriters()
+	return ExecInPrimaryServiceWithOptions(ctx, p, cfg, activeProfiles, script, PrimaryServiceExecOptions{
+		Stdout: outWriter,
+		Stderr: errWriter,
+	})
+}
+
+// ExecInPrimaryServiceWithOptions runs a shell script inside the primary
+// service container with explicit local stream handling.
+func ExecInPrimaryServiceWithOptions(ctx context.Context, p provider.Provider, cfg *config.Config, activeProfiles []profiles.Spec, script string, opts PrimaryServiceExecOptions) error {
 	if cfg.Compose.PrimaryService == "" {
 		return fmt.Errorf("compose: primary_service is required for exec in primary service")
 	}
@@ -625,15 +645,23 @@ func ExecInPrimaryService(ctx context.Context, p provider.Provider, cfg *config.
 		return err
 	}
 	cmd := fmt.Sprintf(
-		"cd %s && sudo docker compose%s exec -T --user root %s sh -lc %s",
+		"cd %s && sudo docker compose%s exec -T --user root %s sh -c %s",
 		shellQuote(cfg.WorkspacePath()),
 		composeArgs,
 		shellQuote(cfg.Compose.PrimaryService),
 		shellQuote(script),
 	)
 	shell.Debugf("compose: exec in primary service: %s", cmd)
-	var outWriter, errWriter = shell.DebugWriters()
+	outWriter := opts.Stdout
+	errWriter := opts.Stderr
+	if outWriter == nil {
+		outWriter = io.Discard
+	}
+	if errWriter == nil {
+		errWriter = io.Discard
+	}
 	return p.Exec(ctx, []string{"bash", "-c", cmd}, provider.ExecOptions{
+		Stdin:  opts.Stdin,
 		Stdout: outWriter,
 		Stderr: errWriter,
 	})

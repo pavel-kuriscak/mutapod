@@ -784,7 +784,11 @@ func runExec(ctx context.Context, cfg *config.Config, prov provider.Provider, ar
 	if err != nil {
 		return err
 	}
-	return compose.ExecInPrimaryService(ctx, prov, cfg, activeProfiles, commandScript(args))
+	return compose.ExecInPrimaryServiceWithOptions(ctx, prov, cfg, activeProfiles, commandScript(args), compose.PrimaryServiceExecOptions{
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	})
 }
 
 func commandScript(args []string) string {
