@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,47 @@ func TestEnsureAmendsManagedBlock(t *testing.T) {
 	}
 	if !strings.Contains(text, "Primary service for attached-container workflows: `web`") {
 		t.Fatal("expected regenerated managed block")
+	}
+}
+
+func TestEnsurePreservesExistingCRLFLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	path := filepath.Join(dir, filename)
+	original := strings.Join([]string{
+		"# Existing",
+		"",
+		"Keep this.",
+		"",
+		beginMarker,
+		"old",
+		endMarker,
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	if _, err := Ensure(cfg); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if !bytes.Contains(data, []byte("\r\n")) {
+		t.Fatalf("expected CRLF line endings:\n%s", string(data))
+	}
+	if bytes.Contains(bytes.ReplaceAll(data, []byte("\r\n"), nil), []byte("\n")) {
+		t.Fatalf("expected no lone LF line endings:\n%q", data)
+	}
+	text := string(data)
+	if !strings.Contains(text, "# Existing") || !strings.Contains(text, "Keep this.") {
+		t.Fatalf("expected existing content to be preserved:\n%s", text)
+	}
+	if strings.Contains(text, "\nold\r\n") || strings.Contains(text, "\r\nold\r\n") {
+		t.Fatalf("expected old managed block to be replaced:\n%s", text)
 	}
 }
 

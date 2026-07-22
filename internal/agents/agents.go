@@ -57,6 +57,7 @@ func Ensure(cfg *config.Config) (string, error) {
 		updated = block
 	} else {
 		updated = mergeManagedBlock(string(data), block)
+		updated = convertLineEndings(updated, detectLineEnding(data))
 	}
 
 	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
@@ -294,4 +295,32 @@ func normalizeSpacing(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.TrimRight(s, "\n") + "\n"
 	return s
+}
+
+func detectLineEnding(data []byte) string {
+	crlf := 0
+	lf := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\n' {
+			continue
+		}
+		if i > 0 && data[i-1] == '\r' {
+			crlf++
+		} else {
+			lf++
+		}
+	}
+	if crlf > lf {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func convertLineEndings(s, lineEnding string) string {
+	normalized := strings.ReplaceAll(s, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	if lineEnding == "\r\n" {
+		return strings.ReplaceAll(normalized, "\n", "\r\n")
+	}
+	return normalized
 }
