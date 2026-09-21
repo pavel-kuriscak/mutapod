@@ -190,15 +190,37 @@ func WriteLeaseWithRetry(ctx context.Context, client *sshrun.Client, workspace, 
 }
 
 func HeartbeatLock(workspace string) (*flock.Flock, error) {
+	dir, err := heartbeatDir()
+	if err != nil {
+		return nil, err
+	}
+	return flock.New(filepath.Join(dir, sanitizeToken(workspace)+".lock")), nil
+}
+
+// OpenHeartbeatLog opens the local diagnostic log for a detached heartbeat.
+func OpenHeartbeatLog(workspace string) (*os.File, error) {
+	dir, err := heartbeatDir()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, sanitizeToken(workspace)+".log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("idle: open heartbeat log: %w", err)
+	}
+	return f, nil
+}
+
+func heartbeatDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("idle: home dir: %w", err)
+		return "", fmt.Errorf("idle: home dir: %w", err)
 	}
 	dir := filepath.Join(home, ".mutapod", "heartbeat")
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, fmt.Errorf("idle: mkdir heartbeat dir: %w", err)
+		return "", fmt.Errorf("idle: mkdir heartbeat dir: %w", err)
 	}
-	return flock.New(filepath.Join(dir, sanitizeToken(workspace)+".lock")), nil
+	return dir, nil
 }
 
 func writeTemp(content []byte) (string, error) {

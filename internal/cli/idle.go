@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,23 +83,111 @@ func runIdleHeartbeat(_ *cobra.Command, _ []string) error {
 	interval := idle.HeartbeatInterval(cfg)
 	minLease := heartbeatMinimumLease()
 
-	for {
-		status, err := syncMgr.SyncStatus(ctx)
-		if err != nil {
-			return nil
-		}
-		if !mutagensync.IsActiveSyncStatus(status) {
-			return nil
-		}
-
-		expiresAt := idle.LeaseExpiryWithMinimum(cfg, time.Now(), minLease)
-		if err := idle.WriteLeaseWithClient(ctx, client, cfg.Name, hostID, expiresAt); err != nil {
-			shell.Debugf("idle heartbeat write lease: %v", err)
-			return nil
-		}
-
-		time.Sleep(interval)
+	worker := idleHeartbeatWorker{
+		interval: interval,
+		leaseExpiry: func(now time.Time) time.Time {
+			return idle.LeaseExpiryWithMinimum(cfg, now, minLease)
+		},
+		syncStatus: syncMgr.SyncStatus,
+		writeLease: func(ctx context.Context, expiresAt time.Time) error {
+			return idle.WriteLeaseWithClient(ctx, client, cfg.Name, hostID, expiresAt)
+		},
+		now:         time.Now,
+		wait:        waitForHeartbeat,
+		diagnosticf: heartbeatDiagnosticf,
 	}
+	worker.run(ctx)
+	return nil
+}
+
+type idleHeartbeatWorker struct {
+	interval    time.Duration
+	leaseExpiry func(time.Time) time.Time
+	syncStatus  func(context.Context) (string, error)
+	writeLease  func(context.Context, time.Time) error
+	now         func() time.Time
+	wait        func(context.Context, time.Duration) bool
+	diagnosticf func(string, ...any)
+}
+
+func (w idleHeartbeatWorker) run(ctx context.Context) {
+	leaseExpiresAt := w.leaseExpiry(w.now())
+	lastCondition := "active"
+
+	for {
+		now := w.now()
+		status, err := w.syncStatus(ctx)
+		condition := "active"
+		switch {
+		case err != nil:
+			condition = "status-error"
+			if condition != lastCondition {
+				w.diagnosticf("sync status unavailable; not renewing lease and retrying until %s: %v", leaseExpiresAt.Format(time.RFC3339), err)
+			}
+		case isTerminalHeartbeatStatus(status):
+			w.diagnosticf("sync session is %s; stopping", heartbeatStatusDescription(status))
+			return
+		case !mutagensync.IsActiveSyncStatus(status):
+			condition = "inactive:" + status
+			if condition != lastCondition {
+				w.diagnosticf("sync status is %q; not renewing lease and retrying until %s", status, leaseExpiresAt.Format(time.RFC3339))
+			}
+		default:
+			expiresAt := w.leaseExpiry(now)
+			if err := w.writeLease(ctx, expiresAt); err != nil {
+				condition = "write-error"
+				if condition != lastCondition {
+					w.diagnosticf("lease refresh failed; retrying until %s: %v", leaseExpiresAt.Format(time.RFC3339), err)
+				}
+			} else {
+				leaseExpiresAt = expiresAt
+				if lastCondition != "active" {
+					w.diagnosticf("sync and lease refresh recovered; lease renewed until %s", leaseExpiresAt.Format(time.RFC3339))
+				}
+			}
+		}
+		lastCondition = condition
+		if condition != "active" && !now.Before(leaseExpiresAt) {
+			w.diagnosticf("lease recovery window expired at %s; stopping", leaseExpiresAt.Format(time.RFC3339))
+			return
+		}
+
+		if !w.wait(ctx, w.interval) {
+			return
+		}
+	}
+}
+
+func isTerminalHeartbeatStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "paused", "terminated":
+		return true
+	default:
+		return false
+	}
+}
+
+func heartbeatStatusDescription(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "" {
+		return "missing"
+	}
+	return status
+}
+
+func waitForHeartbeat(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func heartbeatDiagnosticf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "%s idle heartbeat: "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
 }
 
 func heartbeatMinimumLease() time.Duration {
@@ -217,10 +306,15 @@ func startIdleHeartbeat(cfg *config.Config, opts leaseOptions) error {
 		return err
 	}
 	defer devNull.Close()
+	heartbeatLog, err := idle.OpenHeartbeatLog(cfg.Name)
+	if err != nil {
+		return err
+	}
+	defer heartbeatLog.Close()
 
 	cmd.Stdin = nil
 	cmd.Stdout = devNull
-	cmd.Stderr = devNull
+	cmd.Stderr = heartbeatLog
 	if err := cmd.Start(); err != nil {
 		return err
 	}
